@@ -80,7 +80,7 @@ func main() {
     
     // Serve index.html at /
     http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-    	data, err := subFS.ReadFile("index.html") // now we can just read "index.html"
+    	data, err := fs.ReadFile(subFS, "index.html")
     	if err != nil {
     		http.Error(w, "index.html not found", 500)
     		return
