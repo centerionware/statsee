@@ -8,15 +8,17 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/gorilla/websocket"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/mem"
+	"github.com/shirou/gopsutil/v3/net"
 )
 
 //go:embed static/*
@@ -28,10 +30,22 @@ var upgrader = websocket.Upgrader{
 }
 
 type WSMessage struct {
-	Type      string             `json:"type"`
-	Timestamp int64              `json:"ts"`
-	Net       map[string]NetStat `json:"net"`
+	Type      string              `json:"type"`
+	Timestamp int64               `json:"ts"`
+	CPU       float64             `json:"cpu"`
+	RAM       RAMStat             `json:"ram"`
 	Disk      map[string]DiskStat `json:"disk"`
+	Net       map[string]NetStat  `json:"net"`
+}
+
+type RAMStat struct {
+	Used uint64 `json:"used"`
+	Free uint64 `json:"free"`
+}
+
+type DiskStat struct {
+	ReadIO  uint64 `json:"read_io"`
+	WriteIO uint64 `json:"write_io"`
 }
 
 type NetStat struct {
@@ -39,13 +53,8 @@ type NetStat struct {
 	BytesSent   uint64  `json:"bytes_sent"`
 	PacketsRecv uint64  `json:"packets_recv"`
 	PacketsSent uint64  `json:"packets_sent"`
-	RateRecv    float64 `json:"rate_recv"`
-	RateSent    float64 `json:"rate_sent"`
-}
-
-type DiskStat struct {
-	ReadIO  uint64 `json:"read_io"`
-	WriteIO uint64 `json:"write_io"`
+	RateRecv    float64 `json:"rate_recv"` // MB/s
+	RateSent    float64 `json:"rate_sent"` // MB/s
 }
 
 type SpeedUpdate struct {
@@ -61,17 +70,10 @@ func main() {
 	}
 	defer db.Close()
 	initDB()
+
 	go startBandwidthCollector()
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		f, err := staticFS.Open("static/index.html")
-		if err != nil {
-			w.WriteHeader(404)
-			return
-		}
-		defer f.Close()
-		io.Copy(w, f)
-	})
+	http.Handle("/", http.FileServer(http.FS(staticFS)))
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	http.HandleFunc("/ws", wsHandler)
@@ -82,18 +84,7 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-// ===== SAFE WS WRITE =====
-func safeWSWrite(conn *websocket.Conn, msg interface{}) bool {
-	if conn == nil {
-		return false
-	}
-	if err := conn.WriteJSON(msg); err != nil {
-		return false
-	}
-	return true
-}
-
-// ===== WS HANDLER =====
+// =================== WebSocket ===================
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -113,14 +104,14 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		var cmd map[string]string
 		json.Unmarshal(msg, &cmd)
 		if cmd["type"] == "speedtest" {
-			go runSpeedTestWS(conn, done)
+			go runSpeedTestWS(conn)
 		}
 	}
 }
 
-// ===== STREAM STATS =====
 func streamStats(conn *websocket.Conn, done chan struct{}) {
 	prevNet := make(map[string]NetStat)
+	prevDisk := make(map[string]DiskStat)
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -129,116 +120,79 @@ func streamStats(conn *websocket.Conn, done chan struct{}) {
 		case <-done:
 			return
 		case <-ticker.C:
-			netStats, _ := readNetworkStats()
-			diskStats, _ := readDiskStats()
+			cpuPerc, _ := cpu.Percent(0, false)
+			memStat, _ := mem.VirtualMemory()
+			netIO, _ := net.IOCounters(true)
+			diskIO, _ := disk.IOCounters()
 
-			now := time.Now()
-			for iface, curr := range netStats {
-				prev := prevNet[iface]
-				curr.RateRecv = float64(curr.BytesRecv-prev.BytesRecv) / 1024 / 1024
-				curr.RateSent = float64(curr.BytesSent-prev.BytesSent) / 1024 / 1024
-				prevNet[iface] = curr
-				netStats[iface] = curr
+			netStats := make(map[string]NetStat)
+			for _, n := range netIO {
+				prev := prevNet[n.Name]
+				rateRecv := float64(n.BytesRecv-prev.BytesRecv) / 1024 / 1024
+				rateSent := float64(n.BytesSent-prev.BytesSent) / 1024 / 1024
+				netStats[n.Name] = NetStat{
+					BytesRecv:   n.BytesRecv,
+					BytesSent:   n.BytesSent,
+					PacketsRecv: n.PacketsRecv,
+					PacketsSent: n.PacketsSent,
+					RateRecv:    rateRecv,
+					RateSent:    rateSent,
+				}
+				prevNet[n.Name] = netStats[n.Name]
+			}
+
+			diskStats := make(map[string]DiskStat)
+			for dev, d := range diskIO {
+				prev := prevDisk[dev]
+				diskStats[dev] = DiskStat{
+					ReadIO:  d.ReadBytes - prev.ReadIO,
+					WriteIO: d.WriteBytes - prev.WriteIO,
+				}
+				prevDisk[dev] = d
 			}
 
 			msg := WSMessage{
 				Type:      "stats",
-				Timestamp: now.Unix(),
-				Net:       netStats,
-				Disk:      diskStats,
+				Timestamp: time.Now().Unix(),
+				CPU:       cpuPerc[0],
+				RAM: RAMStat{
+					Used: memStat.Used / (1024 * 1024),
+					Free: memStat.Available / (1024 * 1024),
+				},
+				Disk: diskStats,
+				Net:  netStats,
 			}
-			safeWSWrite(conn, msg)
+			conn.WriteJSON(msg)
 		}
 	}
 }
 
-// ===== SPEEDTEST =====
-func runSpeedTestWS(conn *websocket.Conn, done chan struct{}) {
+// =================== Speed Test ===================
+func runSpeedTestWS(conn *websocket.Conn) {
 	if conn == nil {
 		return
 	}
 
-	// Download test
-	downloadURL := "https://speed.cloudflare.com/__down?bytes=20000000"
+	// Simple download test
 	start := time.Now()
-	resp, _ := http.Get(downloadURL)
+	resp, _ := http.Get("https://speed.cloudflare.com/__down?bytes=20000000")
 	if resp != nil {
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 	}
 	latency := float64(time.Since(start).Milliseconds())
-	safeWSWrite(conn, SpeedUpdate{"latency", latency})
+	conn.WriteJSON(SpeedUpdate{"latency", latency})
 
-	// Upload test (dummy POST to Cloudflare echo)
-	var total int64
-	var wg sync.WaitGroup
+	// Simple upload test
+	payload := strings.Repeat("0", 1024*1024*5)
 	start = time.Now()
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			payload := strings.Repeat("0", 1024*1024*5)
-			http.Post("https://speed.cloudflare.com/__up", "text/plain", strings.NewReader(payload))
-			atomic.AddInt64(&total, 5)
-		}()
-	}
-	wg.Wait()
-	safeWSWrite(conn, SpeedUpdate{"download", float64(total)})
-	safeWSWrite(conn, SpeedUpdate{"upload", float64(total)})
+	http.Post("https://speed.cloudflare.com/__up", "text/plain", strings.NewReader(payload))
+	duration := float64(time.Since(start).Milliseconds())
+	conn.WriteJSON(SpeedUpdate{"upload", 5 * 1024 / duration})   // MB/s
+	conn.WriteJSON(SpeedUpdate{"download", 20 * 1024 / duration}) // MB/s
 }
 
-// ===== NETWORK & DISK =====
-func readNetworkStats() (map[string]NetStat, error) {
-	stats := make(map[string]NetStat)
-	data, err := os.ReadFile("/proc/net/dev")
-	if err != nil {
-		return stats, err
-	}
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines[2:] {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.Fields(line)
-		iface := strings.TrimSuffix(parts[0], ":")
-		recvBytes, _ := strconv.ParseUint(parts[1], 10, 64)
-		recvPackets, _ := strconv.ParseUint(parts[2], 10, 64)
-		sentBytes, _ := strconv.ParseUint(parts[9], 10, 64)
-		sentPackets, _ := strconv.ParseUint(parts[10], 10, 64)
-		stats[iface] = NetStat{
-			BytesRecv:   recvBytes,
-			BytesSent:   sentBytes,
-			PacketsRecv: recvPackets,
-			PacketsSent: sentPackets,
-		}
-	}
-	return stats, nil
-}
-
-func readDiskStats() (map[string]DiskStat, error) {
-	stats := make(map[string]DiskStat)
-	data, err := os.ReadFile("/proc/diskstats")
-	if err != nil {
-		return stats, err
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) < 14 {
-			continue
-		}
-		dev := parts[2]
-		reads, _ := strconv.ParseUint(parts[5], 10, 64)
-		writes, _ := strconv.ParseUint(parts[9], 10, 64)
-		stats[dev] = DiskStat{ReadIO: reads, WriteIO: writes}
-	}
-	return stats, nil
-}
-
-// ===== BOLTDB BANDWIDTH =====
+// =================== BoltDB Bandwidth ===================
 func initDB() {
 	db.Update(func(tx *bolt.Tx) error {
 		_, _ = tx.CreateBucketIfNotExists([]byte("bandwidth"))
@@ -253,15 +207,18 @@ func startBandwidthCollector() {
 
 	for {
 		<-ticker.C
-		curr, _ := readNetworkStats()
+		netIO, _ := net.IOCounters(true)
 		now := time.Now()
-		for iface, val := range curr {
-			prev := prevNet[iface]
-			inBytes := val.BytesRecv - prev.BytesRecv
-			outBytes := val.BytesSent - prev.BytesSent
-			storeBandwidth(iface, "in", inBytes, now)
-			storeBandwidth(iface, "out", outBytes, now)
-			prevNet[iface] = val
+		for _, n := range netIO {
+			prev := prevNet[n.Name]
+			inBytes := n.BytesRecv - prev.BytesRecv
+			outBytes := n.BytesSent - prev.BytesSent
+			storeBandwidth(n.Name, "in", inBytes, now)
+			storeBandwidth(n.Name, "out", outBytes, now)
+			prevNet[n.Name] = NetStat{
+				BytesRecv: n.BytesRecv,
+				BytesSent: n.BytesSent,
+			}
 		}
 	}
 }
@@ -270,18 +227,16 @@ func storeBandwidth(iface, direction string, bytes uint64, t time.Time) {
 	key := fmt.Sprintf("%s-%s-%s", t.Format("2006-01-02"), iface, direction)
 	db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("bandwidth"))
-		var prev uint64
-		val := b.Get([]byte(key))
-		if val != nil {
-			fmt.Sscanf(string(val), "%d", &prev)
-		}
-		prev += bytes
-		b.Put([]byte(key), []byte(fmt.Sprintf("%d", prev)))
+		prev := b.Get([]byte(key))
+		var prevVal uint64
+		fmt.Sscanf(string(prev), "%d", &prevVal)
+		prevVal += bytes
+		b.Put([]byte(key), []byte(fmt.Sprintf("%d", prevVal)))
 		return nil
 	})
 }
 
-// ===== DAILY / MONTHLY API =====
+// =================== API ===================
 func dailyHandler(w http.ResponseWriter, r *http.Request)   { outputUsage(w, "2006-01-02") }
 func monthlyHandler(w http.ResponseWriter, r *http.Request) { outputUsage(w, "2006-01") }
 
