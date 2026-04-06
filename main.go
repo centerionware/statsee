@@ -71,18 +71,25 @@ func main() {
 
 	go startBandwidthCollector()
 
-	// Serve index.html at /
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		data, err := staticFS.ReadFile("static/index.html")
-		if err != nil {
-			http.Error(w, "index.html not found", 500)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html")
-		w.Write(data)
-	})
-
-	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
+    // Wrap the embedded FS to remove the "static/" prefix
+    subFS, err := fs.Sub(staticFS, "static")
+    if err != nil {
+    	log.Fatal(err)
+    }
+    
+    // Serve index.html at /
+    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+    	data, err := subFS.ReadFile("index.html") // now we can just read "index.html"
+    	if err != nil {
+    		http.Error(w, "index.html not found", 500)
+    		return
+    	}
+    	w.Header().Set("Content-Type", "text/html")
+    	w.Write(data)
+    })
+    
+    // Serve static files at /static/
+    http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(subFS))))
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	http.HandleFunc("/ws", wsHandler)
 	http.HandleFunc("/api/bandwidth/daily", dailyHandler)
