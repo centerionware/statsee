@@ -73,7 +73,12 @@ func main() {
 
 	// Serve index.html at /
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		data, _ := staticFS.ReadFile("static/index.html")
+		data, err := staticFS.ReadFile("static/index.html")
+		if err != nil {
+			http.Error(w, "index.html not found", 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
 		w.Write(data)
 	})
 
@@ -115,6 +120,17 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 func streamStats(conn *websocket.Conn, done chan struct{}) {
 	prevNet := make(map[string]NetStat)
 	prevDisk := make(map[string]DiskStat)
+
+	// initialize previous values to avoid 0
+	netIO, _ := net.IOCounters(true)
+	for _, n := range netIO {
+		prevNet[n.Name] = NetStat{BytesRecv: n.BytesRecv, BytesSent: n.BytesSent}
+	}
+	diskIO, _ := disk.IOCounters()
+	for dev, d := range diskIO {
+		prevDisk[dev] = DiskStat{ReadIO: d.ReadBytes, WriteIO: d.WriteBytes}
+	}
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -141,7 +157,7 @@ func streamStats(conn *websocket.Conn, done chan struct{}) {
 					RateRecv:    rateRecv,
 					RateSent:    rateSent,
 				}
-				prevNet[n.Name] = netStats[n.Name]
+				prevNet[n.Name] = NetStat{BytesRecv: n.BytesRecv, BytesSent: n.BytesSent}
 			}
 
 			diskStats := make(map[string]DiskStat)
@@ -151,10 +167,7 @@ func streamStats(conn *websocket.Conn, done chan struct{}) {
 					ReadIO:  d.ReadBytes - prev.ReadIO,
 					WriteIO: d.WriteBytes - prev.WriteIO,
 				}
-				prevDisk[dev] = DiskStat{
-					ReadIO:  d.ReadBytes,
-					WriteIO: d.WriteBytes,
-				}
+				prevDisk[dev] = DiskStat{ReadIO: d.ReadBytes, WriteIO: d.WriteBytes}
 			}
 
 			msg := WSMessage{
@@ -179,7 +192,6 @@ func runSpeedTestWS(conn *websocket.Conn) {
 		return
 	}
 
-	// Simple download test
 	start := time.Now()
 	resp, _ := http.Get("https://speed.cloudflare.com/__down?bytes=20000000")
 	if resp != nil {
@@ -189,7 +201,6 @@ func runSpeedTestWS(conn *websocket.Conn) {
 	latency := float64(time.Since(start).Milliseconds())
 	conn.WriteJSON(SpeedUpdate{"latency", latency})
 
-	// Simple upload test
 	payload := strings.Repeat("0", 1024*1024*5)
 	start = time.Now()
 	http.Post("https://speed.cloudflare.com/__up", "text/plain", strings.NewReader(payload))
@@ -208,6 +219,11 @@ func initDB() {
 
 func startBandwidthCollector() {
 	prevNet := make(map[string]NetStat)
+	netIO, _ := net.IOCounters(true)
+	for _, n := range netIO {
+		prevNet[n.Name] = NetStat{BytesRecv: n.BytesRecv, BytesSent: n.BytesSent}
+	}
+
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
@@ -221,10 +237,7 @@ func startBandwidthCollector() {
 			outBytes := n.BytesSent - prev.BytesSent
 			storeBandwidth(n.Name, "in", inBytes, now)
 			storeBandwidth(n.Name, "out", outBytes, now)
-			prevNet[n.Name] = NetStat{
-				BytesRecv: n.BytesRecv,
-				BytesSent: n.BytesSent,
-			}
+			prevNet[n.Name] = NetStat{BytesRecv: n.BytesRecv, BytesSent: n.BytesSent}
 		}
 	}
 }
