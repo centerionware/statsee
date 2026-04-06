@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
-    "fs"
+    "io/fs"
 
 	bolt "go.etcd.io/bbolt"
 
