@@ -4,17 +4,12 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
-	"math"
-	"net"
 	"net/http"
-	"os"
-	"runtime"
-	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -22,10 +17,9 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
-	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/load"
 	"github.com/shirou/gopsutil/v3/mem"
-	"github.com/shirou/gopsutil/v3/net"
+	gnet "github.com/shirou/gopsutil/v3/net"
 )
 
 //go:embed static/*
@@ -37,14 +31,17 @@ var upgrader = websocket.Upgrader{
 
 var db *bolt.DB
 
+// ===== TYPES =====
+
 type WSMessage struct {
-	CPU        float64            `json:"cpu"`
-	Load       *load.AvgStat      `json:"load"`
-	RAMUsed    uint64             `json:"ram_used"`
-	RAMFree    uint64             `json:"ram_free"`
-	Net        map[string]NetStat `json:"net"`
-	Disk       map[string]DiskStat`json:"disk"`
-	Timestamp  int64              `json:"ts"`
+	Type      string              `json:"type"`
+	CPU       float64             `json:"cpu"`
+	Load      *load.AvgStat       `json:"load"`
+	RAMUsed   uint64              `json:"ram_used"`
+	RAMFree   uint64              `json:"ram_free"`
+	Net       map[string]NetStat  `json:"net"`
+	Disk      map[string]DiskStat `json:"disk"`
+	Timestamp int64               `json:"ts"`
 }
 
 type NetStat struct {
@@ -64,12 +61,13 @@ type SpeedServer struct {
 	Host string `json:"host"`
 }
 
-type SpeedResult struct {
-	Server   string  `json:"server"`
-	Latency  float64 `json:"latency"`
-	Download float64 `json:"download"`
-	Upload   float64 `json:"upload"`
+type SpeedUpdate struct {
+	Type    string  `json:"type"`
+	Value   float64 `json:"value"`
+	Server  string  `json:"server,omitempty"`
 }
+
+// ===== MAIN =====
 
 func main() {
 	var err error
@@ -78,28 +76,59 @@ func main() {
 		log.Fatal(err)
 	}
 
+	http.Handle("/", http.FileServer(http.FS(staticFS)))
+
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 	})
 
-	http.Handle("/", http.FileServer(http.FS(staticFS)))
-
 	http.HandleFunc("/ws", wsHandler)
 	http.HandleFunc("/api/speedtest/servers", serversHandler)
-	http.HandleFunc("/api/speedtest/start", speedTestHandler)
 
 	log.Println("Listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
+// ===== WS HANDLER =====
+
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	conn, _ := upgrader.Upgrade(w, r, nil)
 	defer conn.Close()
 
-	prevNet := make(map[string]net.IOCountersStat)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go streamStats(ctx, conn)
 
 	for {
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+
+		var cmd map[string]string
+		json.Unmarshal(msg, &cmd)
+
+		if cmd["type"] == "speedtest" {
+			go runSpeedTestWS(conn)
+		}
+	}
+}
+
+// ===== SYSTEM STATS =====
+
+func streamStats(ctx context.Context, conn *websocket.Conn) {
+	prevNet := make(map[string]gnet.IOCountersStat)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		msg := WSMessage{
+			Type:      "stats",
 			Timestamp: time.Now().Unix(),
 			Net:       make(map[string]NetStat),
 			Disk:      make(map[string]DiskStat),
@@ -116,7 +145,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		msg.RAMUsed = vm.Used
 		msg.RAMFree = vm.Free
 
-		nets, _ := net.IOCounters(true)
+		nets, _ := gnet.IOCounters(true)
 		for _, n := range nets {
 			prev := prevNet[n.Name]
 			msg.Net[n.Name] = NetStat{
@@ -143,72 +172,118 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ===== SPEEDTEST =====
+
 func serversHandler(w http.ResponseWriter, r *http.Request) {
-	servers := discoverServers()
-	json.NewEncoder(w).Encode(servers)
+	json.NewEncoder(w).Encode(discoverServers())
 }
 
 func discoverServers() []SpeedServer {
-	// Lightweight public endpoints (auto discovery placeholder)
 	return []SpeedServer{
-		{"Cloudflare", "https://speed.cloudflare.com/__down?bytes=10000000", "speed.cloudflare.com"},
+		{"Cloudflare", "https://speed.cloudflare.com/__down?bytes=20000000", "speed.cloudflare.com"},
 		{"Google", "https://storage.googleapis.com/gcp-public-data-landsat/index.csv.gz", "google.com"},
 	}
 }
 
-func speedTestHandler(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Servers []SpeedServer `json:"servers"`
-	}
-	json.NewDecoder(r.Body).Decode(&req)
+func runSpeedTestWS(conn *websocket.Conn) {
+	server := discoverServers()[0]
 
-	results := []SpeedResult{}
-	for _, s := range req.Servers {
-		res := runSpeedTest(s)
-		results = append(results, res)
-	}
-
-	json.NewEncoder(w).Encode(results)
-}
-
-func runSpeedTest(s SpeedServer) SpeedResult {
-	lat := measureLatency(s.URL)
-	down := measureDownload(s.URL)
-	up := measureUpload("https://" + s.Host)
-
-	return SpeedResult{
-		Server:   s.Name,
-		Latency:  lat,
-		Download: down,
-		Upload:   up,
-	}
-}
-
-func measureLatency(url string) float64 {
+	// LATENCY
 	start := time.Now()
-	http.Get(url)
-	return float64(time.Since(start).Milliseconds())
-}
+	http.Get(server.URL)
+	lat := float64(time.Since(start).Milliseconds())
 
-func measureDownload(url string) float64 {
-	start := time.Now()
-	resp, err := http.Get(url)
-	if err != nil {
-		return 0
+	conn.WriteJSON(SpeedUpdate{
+		Type:   "latency",
+		Value:  lat,
+		Server: server.Name,
+	})
+
+	// DOWNLOAD
+	var totalBytes int64
+	var wg sync.WaitGroup
+	workers := 4
+	start = time.Now()
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := http.Get(server.URL)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+
+			buf := make([]byte, 32*1024)
+			for {
+				n, err := resp.Body.Read(buf)
+				if n > 0 {
+					atomic.AddInt64(&totalBytes, int64(n))
+				}
+				if err != nil {
+					break
+				}
+			}
+		}()
 	}
-	defer resp.Body.Close()
 
-	n, _ := io.Copy(io.Discard, resp.Body)
-	sec := time.Since(start).Seconds()
+	done := make(chan struct{})
 
-	return float64(n) / sec / 1024 / 1024
-}
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				elapsed := time.Since(start).Seconds()
+				if elapsed == 0 {
+					continue
+				}
+				mbps := float64(atomic.LoadInt64(&totalBytes)) / elapsed / 1024 / 1024
+				conn.WriteJSON(SpeedUpdate{Type: "download", Value: mbps})
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+	}()
 
-func measureUpload(host string) float64 {
-	data := strings.NewReader(strings.Repeat("A", 5*1024*1024))
-	start := time.Now()
-	http.Post(host, "application/octet-stream", data)
-	sec := time.Since(start).Seconds()
+	wg.Wait()
+	close(done)
 
-	return float64(5) / sec
+	// UPLOAD
+	totalBytes = 0
+	start = time.Now()
+	done = make(chan struct{})
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data := strings.NewReader(strings.Repeat("A", 5*1024*1024))
+			http.Post("https://"+server.Host, "application/octet-stream", data)
+			atomic.AddInt64(&totalBytes, 5*1024*1024)
+		}()
+	}
+
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				elapsed := time.Since(start).Seconds()
+				if elapsed == 0 {
+					continue
+				}
+				mbps := float64(atomic.LoadInt64(&totalBytes)) / elapsed / 1024 / 1024
+				conn.WriteJSON(SpeedUpdate{Type: "upload", Value: mbps})
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+	}()
+
+	wg.Wait()
+	close(done)
+
+	conn.WriteJSON(SpeedUpdate{Type: "done"})
 }
