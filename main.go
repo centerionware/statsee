@@ -7,9 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strings"
-	"sync"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -73,7 +71,12 @@ func main() {
 
 	go startBandwidthCollector()
 
-	http.Handle("/", http.FileServer(http.FS(staticFS)))
+	// Serve index.html at /
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		data, _ := staticFS.ReadFile("static/index.html")
+		w.Write(data)
+	})
+
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	http.HandleFunc("/ws", wsHandler)
@@ -148,7 +151,10 @@ func streamStats(conn *websocket.Conn, done chan struct{}) {
 					ReadIO:  d.ReadBytes - prev.ReadIO,
 					WriteIO: d.WriteBytes - prev.WriteIO,
 				}
-				prevDisk[dev] = d
+				prevDisk[dev] = DiskStat{
+					ReadIO:  d.ReadBytes,
+					WriteIO: d.WriteBytes,
+				}
 			}
 
 			msg := WSMessage{
