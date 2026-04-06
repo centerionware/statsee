@@ -50,7 +50,7 @@ func main() {
 
 	// Serve index.html at /
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		data, err := fs.ReadFile(subFS, "static/index.html")
+		data, err := fs.ReadFile(subFS, "index.html")
 		if err != nil {
 			http.Error(w, "index.html not found", 500)
 			return
@@ -111,6 +111,9 @@ func startCollector() {
 	}
 }
 
+var prevNet = make(map[string]net.IOCountersStat)
+var prevTime = time.Now()
+
 func collectStats() {
 	ts := time.Now().Unix()
 	cpuPercent, _ := cpu.Percent(0, false)
@@ -118,25 +121,32 @@ func collectStats() {
 	diskIO, _ := disk.IOCounters()
 	netIO, _ := net.IOCounters(true)
 
-	// Save network totals
-	db.Update(func(tx *bolt.Tx) error {
-		b, _ := tx.CreateBucketIfNotExists([]byte("net"))
-		for _, nic := range netIO {
-			key := []byte(nic.Name)
-			v := map[string]float64{
-				"in":  float64(nic.BytesRecv),
-				"out": float64(nic.BytesSent),
-				"ts":  float64(ts),
-			}
-			data, _ := json.Marshal(v)
-			b.Put(key, data)
-		}
-		return nil
-	})
+	elapsed := time.Since(prevTime).Seconds()
+	netRates := make(map[string]map[string]float64) // MB/s
 
-	// Broadcast live stats
-	wsLock.Lock()
-	defer wsLock.Unlock()
+	for _, nic := range netIO {
+		// Only track eth0
+		if nic.Name != "eth0" {
+			continue
+		}
+		prev, ok := prevNet[nic.Name]
+		if !ok {
+			prev = nic
+		}
+
+		rxRate := float64(nic.BytesRecv-prev.BytesRecv) / 1024 / 1024 / elapsed
+		txRate := float64(nic.BytesSent-prev.BytesSent) / 1024 / 1024 / elapsed
+
+		netRates[nic.Name] = map[string]float64{
+			"rate_recv": rxRate,
+			"rate_sent": txRate,
+		}
+
+		prevNet[nic.Name] = nic
+	}
+	prevTime = time.Now()
+
+	// Broadcast stats
 	msg := map[string]interface{}{
 		"type": "stats",
 		"ts":   ts,
@@ -146,19 +156,14 @@ func collectStats() {
 			"free": float64(memStat.Available) / 1024 / 1024,
 		},
 		"disk": diskIO,
-		"net":  make(map[string]map[string]float64),
+		"net":  netRates,
 	}
 
-	for _, nic := range netIO {
-		msg["net"].(map[string]map[string]float64)[nic.Name] = map[string]float64{
-			"rate_recv": float64(nic.BytesRecv) / 1024 / 1024,
-			"rate_sent": float64(nic.BytesSent) / 1024 / 1024,
-		}
-	}
-
+	wsLock.Lock()
 	for c := range wsClients {
 		c.WriteJSON(msg)
 	}
+	wsLock.Unlock()
 }
 
 // Returns daily/monthly network totals per interface
