@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: statsee
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: statsee
+  labels:
+    app: dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard
+  template:
+    metadata:
+      labels:
+        app: dashboard
+    spec:
+      containers:
+        - name: dashboard
+          image: ghcr.io/centerionware/statsee:latest
+          ports:
+            - containerPort: 8080
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: sys
+              mountPath: /host/sys
+              readOnly: true
+      volumes:
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: sys
+          hostPath:
+            path: /sys
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+  namespace: statsee
+  annotations:
+    tailscale.com/expose: "true"
+    tailscale.com/hostname: statsee
+spec:
+  selector:
+    app: dashboard
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP
