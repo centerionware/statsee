@@ -1,188 +1,84 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
 <meta charset="UTF-8">
-<title>System Dashboard</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard</title>
 <style>
-  body {
-    margin: 0;
-    font-family: system-ui, sans-serif;
-    background: #0b0f14;
-    color: #e6edf3;
-  }
-  header {
-    padding: 16px;
-    font-size: 20px;
-    font-weight: bold;
-    background: #11161c;
-    border-bottom: 1px solid #1f2933;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 16px;
-    padding: 16px;
-  }
-  .card {
-    background: #11161c;
-    border-radius: 12px;
-    padding: 16px;
-    box-shadow: 0 0 0 1px #1f2933;
-  }
-  canvas {
-    width: 100%;
-    height: 150px;
-  }
-  .big {
-    font-size: 28px;
-    font-weight: bold;
-  }
-  button {
-    background: #1f6feb;
-    border: none;
-    padding: 10px 16px;
-    border-radius: 8px;
-    color: white;
-    cursor: pointer;
-  }
-  select {
-    width: 100%;
-    padding: 8px;
-    margin-bottom: 10px;
-    background: #0b0f14;
-    color: white;
-    border: 1px solid #1f2933;
-  }
+body { background:#0b0f14; color:white; font-family:sans-serif; margin:0 }
+.card { background:#11161c; padding:16px; margin:16px; border-radius:10px }
+.big { font-size:28px }
+canvas { width:100%; height:150px }
+button { padding:10px; background:#1f6feb; color:white; border:none }
 </style>
 </head>
 <body>
 
-<header>📊 System Dashboard</header>
+<div class="card">
+  CPU: <span id="cpu"></span>
+  <canvas id="cpuChart"></canvas>
+</div>
 
-<div class="grid">
-  <div class="card">
-    <div>CPU</div>
-    <div class="big" id="cpu">0%</div>
-    <canvas id="cpuChart"></canvas>
-  </div>
-
-  <div class="card">
-    <div>RAM</div>
-    <div class="big" id="ram">0 GB</div>
-    <canvas id="ramChart"></canvas>
-  </div>
-
-  <div class="card">
-    <div>Network</div>
-    <div class="big" id="net">0 MB/s</div>
-    <canvas id="netChart"></canvas>
-  </div>
-
-  <div class="card">
-    <div>Disk</div>
-    <div id="disk"></div>
-  </div>
-
-  <div class="card">
-    <div>Speed Test</div>
-    <select id="servers" multiple></select>
-    <button onclick="runTest()">Start Test</button>
-    <div id="results"></div>
-  </div>
+<div class="card">
+  Speedtest<br>
+  Latency: <span id="latency"></span><br>
+  <div class="big" id="speed">0</div>
+  <canvas id="gauge"></canvas>
+  <button onclick="start()">Start</button>
 </div>
 
 <script>
-const wsProto = location.protocol === "https:" ? "wss://" : "ws://";
-const ws = new WebSocket(wsProto + location.host + "/ws");
+const ws = new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
 
-let cpuData = [], ramData = [], netData = [];
+let cpuData=[];
 
-function draw(canvasId, data) {
-  const c = document.getElementById(canvasId);
-  const ctx = c.getContext("2d");
+ws.onmessage = e => {
+  const d = JSON.parse(e.data);
+
+  if(d.type==="stats"){
+    document.getElementById("cpu").innerText=d.cpu.toFixed(1)+"%";
+    cpuData.push(d.cpu); if(cpuData.length>50) cpuData.shift();
+    draw("cpuChart",cpuData);
+  }
+
+  if(d.type==="latency"){
+    document.getElementById("latency").innerText=d.value+" ms";
+  }
+
+  if(d.type==="download"||d.type==="upload"){
+    document.getElementById("speed").innerText=d.value.toFixed(2)+" MB/s";
+    drawGauge(d.value);
+  }
+};
+
+function start(){
+  ws.send(JSON.stringify({type:"speedtest"}));
+}
+
+function draw(id,data){
+  const c=document.getElementById(id);
+  const ctx=c.getContext("2d");
   ctx.clearRect(0,0,c.width,c.height);
-
   ctx.beginPath();
-  data.forEach((v,i) => {
-    const x = i * (c.width / data.length);
-    const y = c.height - (v / Math.max(...data,1)) * c.height;
-    if(i===0) ctx.moveTo(x,y);
-    else ctx.lineTo(x,y);
+  data.forEach((v,i)=>{
+    let x=i*(c.width/data.length);
+    let y=c.height-(v/100)*c.height;
+    i?ctx.lineTo(x,y):ctx.moveTo(x,y);
   });
-  ctx.strokeStyle = "#1f6feb";
   ctx.stroke();
 }
 
-ws.onmessage = (e) => {
-  const d = JSON.parse(e.data);
+function drawGauge(v){
+  const c=document.getElementById("gauge");
+  const ctx=c.getContext("2d");
+  ctx.clearRect(0,0,c.width,c.height);
 
-  document.getElementById("cpu").innerText = d.cpu.toFixed(1) + "%";
-  cpuData.push(d.cpu); if(cpuData.length>50) cpuData.shift();
+  let max=200;
+  let angle=(v/max)*Math.PI;
 
-  const ramGB = d.ram_used / 1024 / 1024 / 1024;
-  document.getElementById("ram").innerText = ramGB.toFixed(2) + " GB";
-  ramData.push(ramGB); if(ramData.length>50) ramData.shift();
-
-  let totalNet = 0;
-  for (let k in d.net) {
-    totalNet += d.net[k].sent + d.net[k].recv;
-  }
-  const mb = totalNet / 1024 / 1024;
-  document.getElementById("net").innerText = mb.toFixed(2) + " MB/s";
-  netData.push(mb); if(netData.length>50) netData.shift();
-
-  let diskHTML = "";
-  for (let k in d.disk) {
-    const used = d.disk[k].used / 1024 / 1024 / 1024;
-    const total = d.disk[k].total / 1024 / 1024 / 1024;
-    diskHTML += `<div>${k}: ${used.toFixed(1)} / ${total.toFixed(1)} GB</div>`;
-  }
-  document.getElementById("disk").innerHTML = diskHTML;
-
-  draw("cpuChart", cpuData);
-  draw("ramChart", ramData);
-  draw("netChart", netData);
-};
-
-async function loadServers() {
-  const res = await fetch("/api/speedtest/servers");
-  const servers = await res.json();
-
-  const sel = document.getElementById("servers");
-  servers.forEach((s, i) => {
-    const opt = document.createElement("option");
-    opt.value = i;
-    opt.text = s.name;
-    sel.appendChild(opt);
-  });
-
-  window.serverList = servers;
+  ctx.beginPath();
+  ctx.arc(150,150,100,Math.PI,Math.PI+angle);
+  ctx.stroke();
 }
-
-async function runTest() {
-  const sel = document.getElementById("servers");
-  const selected = Array.from(sel.selectedOptions).map(o => window.serverList[o.value]);
-
-  const res = await fetch("/api/speedtest/start", {
-    method: "POST",
-    body: JSON.stringify({ servers: selected })
-  });
-
-  const results = await res.json();
-  const out = document.getElementById("results");
-
-  out.innerHTML = results.map(r => `
-    <div>
-      <b>${r.server}</b><br>
-      Latency: ${r.latency.toFixed(1)} ms<br>
-      Down: ${r.download.toFixed(2)} MB/s<br>
-      Up: ${r.upload.toFixed(2)} MB/s
-    </div>
-  `).join("<hr>");
-}
-
-loadServers();
 </script>
 
 </body>
