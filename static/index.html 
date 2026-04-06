@@ -5,157 +5,94 @@
 <title>Statsee Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-body { font-family: Arial, sans-serif; margin: 0; background:#f4f4f9; color:#333; }
-header { padding: 1em; background: #1e1e2f; color: white; text-align:center; font-size:1.5em; }
-.container { display: grid; grid-template-columns: repeat(auto-fit,minmax(400px,1fr)); gap: 20px; padding:20px; }
-.card { background:white; border-radius:10px; padding:20px; box-shadow: 0 0 10px rgba(0,0,0,0.1);}
+body { font-family: Arial; margin:0; background:#121212; color:#eee; }
+header { padding:1em; background:#1f1f2f; text-align:center; font-size:1.5em; color:#fff; }
+.container { display:grid; grid-template-columns: repeat(auto-fit,minmax(400px,1fr)); gap:20px; padding:20px; }
+.card { background:#1e1e2e; border-radius:10px; padding:20px; box-shadow:0 0 10px rgba(0,0,0,0.5); }
 canvas { width:100% !important; height:250px !important; }
-button { padding: 10px 20px; background:#1e1e2f; color:white; border:none; border-radius:5px; cursor:pointer; }
-button:hover { background:#333; }
+button { padding:10px 20px; background:#ff9800; color:#121212; border:none; border-radius:5px; cursor:pointer; }
+button:hover { background:#ffa726; }
 </style>
 </head>
 <body>
 <header>Statsee Dashboard</header>
 <div class="container">
-  <div class="card">
-    <h3>CPU Load</h3>
-    <canvas id="cpuChart"></canvas>
-  </div>
-  <div class="card">
-    <h3>RAM Usage</h3>
-    <canvas id="ramChart"></canvas>
-  </div>
-  <div class="card">
-    <h3>Disk Usage</h3>
-    <canvas id="diskChart"></canvas>
-  </div>
-  <div class="card">
-    <h3>Network I/O per Interface</h3>
-    <canvas id="netChart"></canvas>
-  </div>
-  <div class="card">
-    <h3>Bandwidth Daily (GB)</h3>
-    <canvas id="dailyChart"></canvas>
-  </div>
-  <div class="card">
-    <h3>Bandwidth Monthly (GB)</h3>
-    <canvas id="monthlyChart"></canvas>
-  </div>
-  <div class="card">
-    <h3>Speed Test</h3>
-    <button id="speedBtn">Run Speed Test</button>
-    <canvas id="speedChart"></canvas>
-  </div>
+  <div class="card"><h3>CPU Load</h3><canvas id="cpuChart"></canvas></div>
+  <div class="card"><h3>RAM Usage</h3><canvas id="ramChart"></canvas></div>
+  <div class="card"><h3>Disk I/O</h3><canvas id="diskChart"></canvas></div>
+  <div class="card"><h3>Network Usage (Stacked)</h3><canvas id="netChart"></canvas></div>
+  <div class="card"><h3>Daily GB Usage</h3><canvas id="dailyChart"></canvas></div>
+  <div class="card"><h3>Monthly GB Usage</h3><canvas id="monthlyChart"></canvas></div>
+  <div class="card"><h3>Speed Test</h3><button id="speedBtn">Run Speed Test</button><canvas id="speedChart"></canvas></div>
 </div>
 
 <script>
-const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss':'ws'}://${location.host}/ws`);
+const ws = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
 let cpuChart, ramChart, diskChart, netChart, dailyChart, monthlyChart, speedChart;
-const netData = {};
-const ifaceColors = {};
-const speedData = { download: [], upload: [], latency: [] };
+const netData = {}; const ifaceColors = {};
 
-// ===== INIT CHARTS =====
-function createLineChart(ctx, label, color) {
-  return new Chart(ctx, {
-    type:'line',
-    data: { labels: [], datasets: [{ label, data: [], borderColor: color, fill:false }] },
-    options:{ animation:false, responsive:true, scales:{ y:{ beginAtZero:true } } }
-  });
-}
+function randomColor(){return '#'+Math.floor(Math.random()*16777215).toString(16)}
 
 window.onload = () => {
-  cpuChart = createLineChart(document.getElementById('cpuChart'), 'CPU %', '#ff6384');
-  ramChart = createLineChart(document.getElementById('ramChart'), 'RAM GB', '#36a2eb');
-  diskChart = createLineChart(document.getElementById('diskChart'), 'Disk GB', '#ffce56');
-  netChart = new Chart(document.getElementById('netChart'), { type:'line', data:{ labels:[], datasets:[] }, options:{ animation:false, responsive:true, scales:{ y:{ beginAtZero:true } } } });
-  dailyChart = createLineChart(document.getElementById('dailyChart'), 'Daily GB', '#4bc0c0');
-  monthlyChart = createLineChart(document.getElementById('monthlyChart'), 'Monthly GB', '#9966ff');
-  speedChart = new Chart(document.getElementById('speedChart'), { type:'line', data:{ labels:[], datasets:[
-    { label:'Download MB/s', data:[], borderColor:'#36a2eb', fill:false },
-    { label:'Upload MB/s', data:[], borderColor:'#ff6384', fill:false },
-    { label:'Latency ms', data:[], borderColor:'#ffce56', fill:false }
-  ]}, options:{ animation:false, responsive:true, scales:{ y:{ beginAtZero:true } } } });
+  function createChart(ctx,label,color){return new Chart(ctx,{type:'line',data:{labels:[],datasets:[{label,data:[],borderColor:color,fill:false}]},options:{animation:false,responsive:true,scales:{y:{beginAtZero:true}}}})}
+  cpuChart=createChart(document.getElementById('cpuChart'),'CPU %','#ff6384');
+  ramChart=createChart(document.getElementById('ramChart'),'RAM GB','#36a2eb');
+  diskChart=createChart(document.getElementById('diskChart'),'Disk I/O','#ffce56');
+
+  netChart=new Chart(document.getElementById('netChart'),{
+    type:'bar',
+    data:{labels:[], datasets:[]},
+    options:{responsive:true, animation:false, scales:{x:{stacked:true}, y:{stacked:true}}}
+  });
+
+  dailyChart=createChart(document.getElementById('dailyChart'),'Daily GB','#4bc0c0');
+  monthlyChart=createChart(document.getElementById('monthlyChart'),'Monthly GB','#9966ff');
+
+  speedChart=new Chart(document.getElementById('speedChart'),{
+    type:'line',
+    data:{labels:[], datasets:[
+      {label:'Download MB/s',data:[],borderColor:'#36a2eb',fill:false},
+      {label:'Upload MB/s',data:[],borderColor:'#ff6384',fill:false},
+      {label:'Latency ms',data:[],borderColor:'#ffce56',fill:false}
+    ]},
+    options:{responsive:true, animation:false, scales:{y:{beginAtZero:true}}}
+  });
 };
 
-// ===== WS DATA =====
 ws.onmessage = e => {
   const msg = JSON.parse(e.data);
   const ts = new Date(msg.ts*1000).toLocaleTimeString();
-
   if(msg.type==='stats'){
-    // CPU
-    updateChart(cpuChart, ts, msg.cpu);
-    // RAM in GB
-    updateChart(ramChart, ts, (msg.ram_used/1024/1024/1024));
-    // Disk (total used across partitions)
-    let totalUsed = 0;
-    Object.values(msg.disk).forEach(d=>totalUsed+=d.Used/1024/1024/1024);
-    updateChart(diskChart, ts, totalUsed);
-    // Net per interface
-    Object.entries(msg.net).forEach(([iface,v])=>{
-      if(!ifaceColors[iface+'-in']) ifaceColors[iface+'-in'] = randomColor();
-      if(!ifaceColors[iface+'-out']) ifaceColors[iface+'-out'] = randomColor();
-      if(!netData[iface+'-in']) netData[iface+'-in'] = [];
-      if(!netData[iface+'-out']) netData[iface+'-out'] = [];
-      netData[iface+'-in'].push({x:ts,y:(v.rateRecv/1024/1024).toFixed(2)});
-      netData[iface+'-out'].push({x:ts,y:(v.rateSent/1024/1024).toFixed(2)});
+    if(msg.Net) Object.entries(msg.Net).forEach(([iface,v])=>{
+      ['in','out'].forEach(dir=>{
+        const key=iface+'-'+dir;
+        if(!ifaceColors[key]) ifaceColors[key]=randomColor();
+        if(!netData[key]) netData[key]=[];
+        netData[key].push({x:ts,y:dir==='in'?v.RateRecv:v.RateSent});
+      });
     });
     netChart.data.labels.push(ts);
-    netChart.data.datasets = [];
+    netChart.data.datasets=[];
     Object.entries(netData).forEach(([key,data])=>{
-      netChart.data.datasets.push({ label:key, data:data, borderColor:ifaceColors[key], fill:false });
+      netChart.data.datasets.push({label:key,data:data,backgroundColor:ifaceColors[key]});
     });
+    if(netChart.data.labels.length>30){netChart.data.labels.shift()}
     netChart.update();
-  }else if(msg.type==='download'){
-    addSpeedData('Download MB/s', msg.value);
-  }else if(msg.type==='upload'){
-    addSpeedData('Upload MB/s', msg.value);
-  }else if(msg.type==='latency'){
-    addSpeedData('Latency ms', msg.value);
   }
 };
 
-function updateChart(chart, label, value){
-  chart.data.labels.push(label);
-  chart.data.datasets[0].data.push(value);
-  if(chart.data.labels.length>30){ chart.data.labels.shift(); chart.data.datasets[0].data.shift(); }
-  chart.update();
-}
+document.getElementById('speedBtn').onclick = () => ws.send(JSON.stringify({type:'speedtest'}));
 
-function randomColor(){
-  return '#'+Math.floor(Math.random()*16777215).toString(16);
-}
-
-function addSpeedData(label, value){
-  const idx = speedChart.data.datasets.findIndex(d=>d.label===label);
-  const ts = new Date().toLocaleTimeString();
-  speedChart.data.labels.push(ts);
-  speedChart.data.datasets[idx].data.push(value);
-  if(speedChart.data.labels.length>30){
-    speedChart.data.labels.shift();
-    speedChart.data.datasets.forEach(d=>d.data.shift());
-  }
-  speedChart.update();
-}
-
-// ===== SPEEDTEST BUTTON =====
-document.getElementById('speedBtn').onclick = () => {
-  ws.send(JSON.stringify({type:'speedtest'}));
-};
-
-// ===== FETCH DAILY & MONTHLY =====
 async function fetchUsage(){
   const daily = await fetch('/api/bandwidth/daily').then(r=>r.json());
   const monthly = await fetch('/api/bandwidth/monthly').then(r=>r.json());
   dailyChart.data.labels = Object.keys(daily);
-  dailyChart.data.datasets[0].data = Object.values(daily).map(v=>(v/1024/1024/1024).toFixed(2));
+  dailyChart.data.datasets[0].data = Object.values(daily).map(v=>Object.values(v).reduce((a,b)=>a+b,0).toFixed(2));
   monthlyChart.data.labels = Object.keys(monthly);
-  monthlyChart.data.datasets[0].data = Object.values(monthly).map(v=>(v/1024/1024/1024).toFixed(2));
+  monthlyChart.data.datasets[0].data = Object.values(monthly).map(v=>Object.values(v).reduce((a,b)=>a+b,0).toFixed(2));
   dailyChart.update(); monthlyChart.update();
 }
-fetchUsage();
-setInterval(fetchUsage, 5*60*1000);
+fetchUsage(); setInterval(fetchUsage,5*60*1000);
 </script>
 </body>
 </html>
