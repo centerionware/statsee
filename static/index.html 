@@ -1,84 +1,243 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Dashboard</title>
+<title>System Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
 <style>
-body { background:#0b0f14; color:white; font-family:sans-serif; margin:0 }
-.card { background:#11161c; padding:16px; margin:16px; border-radius:10px }
-.big { font-size:28px }
-canvas { width:100%; height:150px }
-button { padding:10px; background:#1f6feb; color:white; border:none }
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: #0b0f14;
+  color: #e6edf3;
+}
+
+header {
+  padding: 16px;
+  font-size: 20px;
+  font-weight: bold;
+  background: #11161c;
+  border-bottom: 1px solid #1f2933;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  padding: 16px;
+}
+
+.card {
+  background: #11161c;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 0 0 1px #1f2933;
+}
+
+.big {
+  font-size: 28px;
+  font-weight: bold;
+}
+
+canvas {
+  width: 100%;
+  height: 150px;
+}
+
+button {
+  background: #1f6feb;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 8px;
+  color: white;
+  cursor: pointer;
+}
+
+.speed-phase {
+  font-size: 14px;
+  opacity: 0.7;
+}
 </style>
 </head>
+
 <body>
 
-<div class="card">
-  CPU: <span id="cpu"></span>
-  <canvas id="cpuChart"></canvas>
-</div>
+<header>📊 System Dashboard</header>
 
-<div class="card">
-  Speedtest<br>
-  Latency: <span id="latency"></span><br>
-  <div class="big" id="speed">0</div>
-  <canvas id="gauge"></canvas>
-  <button onclick="start()">Start</button>
+<div class="grid">
+
+  <!-- CPU -->
+  <div class="card">
+    <div>CPU</div>
+    <div class="big" id="cpu">0%</div>
+    <canvas id="cpuChart"></canvas>
+  </div>
+
+  <!-- RAM -->
+  <div class="card">
+    <div>RAM</div>
+    <div class="big" id="ram">0 GB</div>
+    <canvas id="ramChart"></canvas>
+  </div>
+
+  <!-- Network -->
+  <div class="card">
+    <div>Network</div>
+    <div class="big" id="net">0 MB/s</div>
+    <canvas id="netChart"></canvas>
+  </div>
+
+  <!-- Disk -->
+  <div class="card">
+    <div>Disk Usage</div>
+    <div id="disk"></div>
+  </div>
+
+  <!-- Speedtest -->
+  <div class="card">
+    <div>Speed Test</div>
+
+    <div class="speed-phase" id="phase">Idle</div>
+    <div>Latency: <span id="latency">-</span></div>
+
+    <div class="big" id="speedValue">0 MB/s</div>
+    <canvas id="gauge"></canvas>
+
+    <button onclick="startSpeedtest()">Start Test</button>
+  </div>
+
 </div>
 
 <script>
-const ws = new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
+const wsProto = location.protocol === "https:" ? "wss://" : "ws://";
+const ws = new WebSocket(wsProto + location.host + "/ws");
 
-let cpuData=[];
+let cpuData = [], ramData = [], netData = [];
 
-ws.onmessage = e => {
+// ===== GRAPH DRAW =====
+function draw(canvasId, data) {
+  const c = document.getElementById(canvasId);
+  const ctx = c.getContext("2d");
+
+  ctx.clearRect(0, 0, c.width, c.height);
+
+  if (data.length < 2) return;
+
+  const max = Math.max(...data, 1);
+
+  ctx.beginPath();
+  data.forEach((v, i) => {
+    const x = i * (c.width / data.length);
+    const y = c.height - (v / max) * c.height;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+
+  ctx.strokeStyle = "#1f6feb";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+// ===== GAUGE =====
+function drawGauge(value) {
+  const c = document.getElementById("gauge");
+  const ctx = c.getContext("2d");
+
+  const w = c.width;
+  const h = c.height;
+
+  ctx.clearRect(0, 0, w, h);
+
+  const max = 200; // MB/s cap (adjust later)
+  const percent = Math.min(value / max, 1);
+
+  const centerX = w / 2;
+  const centerY = h;
+  const radius = Math.min(w / 2, h);
+
+  const start = Math.PI;
+  const end = Math.PI + percent * Math.PI;
+
+  // background arc
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, radius - 10, Math.PI, Math.PI * 2);
+  ctx.strokeStyle = "#1f2933";
+  ctx.lineWidth = 10;
+  ctx.stroke();
+
+  // value arc
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, radius - 10, start, end);
+  ctx.strokeStyle = "#1f6feb";
+  ctx.lineWidth = 10;
+  ctx.stroke();
+}
+
+// ===== SPEEDTEST CONTROL =====
+function startSpeedtest() {
+  document.getElementById("phase").innerText = "Starting...";
+  ws.send(JSON.stringify({ type: "speedtest" }));
+}
+
+// ===== WS HANDLER =====
+ws.onmessage = (e) => {
   const d = JSON.parse(e.data);
 
-  if(d.type==="stats"){
-    document.getElementById("cpu").innerText=d.cpu.toFixed(1)+"%";
-    cpuData.push(d.cpu); if(cpuData.length>50) cpuData.shift();
-    draw("cpuChart",cpuData);
+  // ===== STATS =====
+  if (d.type === "stats") {
+
+    document.getElementById("cpu").innerText = d.cpu.toFixed(1) + "%";
+    cpuData.push(d.cpu); if (cpuData.length > 50) cpuData.shift();
+
+    const ramGB = d.ram_used / 1024 / 1024 / 1024;
+    document.getElementById("ram").innerText = ramGB.toFixed(2) + " GB";
+    ramData.push(ramGB); if (ramData.length > 50) ramData.shift();
+
+    let totalNet = 0;
+    for (let k in d.net) {
+      totalNet += d.net[k].sent + d.net[k].recv;
+    }
+
+    const mb = totalNet / 1024 / 1024;
+    document.getElementById("net").innerText = mb.toFixed(2) + " MB/s";
+    netData.push(mb); if (netData.length > 50) netData.shift();
+
+    let diskHTML = "";
+    for (let k in d.disk) {
+      const used = d.disk[k].used / 1024 / 1024 / 1024;
+      const total = d.disk[k].total / 1024 / 1024 / 1024;
+      diskHTML += `<div>${k}: ${used.toFixed(1)} / ${total.toFixed(1)} GB</div>`;
+    }
+    document.getElementById("disk").innerHTML = diskHTML;
+
+    draw("cpuChart", cpuData);
+    draw("ramChart", ramData);
+    draw("netChart", netData);
   }
 
-  if(d.type==="latency"){
-    document.getElementById("latency").innerText=d.value+" ms";
+  // ===== SPEEDTEST =====
+  if (d.type === "latency") {
+    document.getElementById("phase").innerText = "Latency";
+    document.getElementById("latency").innerText = d.value.toFixed(1) + " ms";
   }
 
-  if(d.type==="download"||d.type==="upload"){
-    document.getElementById("speed").innerText=d.value.toFixed(2)+" MB/s";
+  if (d.type === "download") {
+    document.getElementById("phase").innerText = "Download";
+    document.getElementById("speedValue").innerText = d.value.toFixed(2) + " MB/s";
     drawGauge(d.value);
   }
+
+  if (d.type === "upload") {
+    document.getElementById("phase").innerText = "Upload";
+    document.getElementById("speedValue").innerText = d.value.toFixed(2) + " MB/s";
+    drawGauge(d.value);
+  }
+
+  if (d.type === "done") {
+    document.getElementById("phase").innerText = "Complete";
+  }
 };
-
-function start(){
-  ws.send(JSON.stringify({type:"speedtest"}));
-}
-
-function draw(id,data){
-  const c=document.getElementById(id);
-  const ctx=c.getContext("2d");
-  ctx.clearRect(0,0,c.width,c.height);
-  ctx.beginPath();
-  data.forEach((v,i)=>{
-    let x=i*(c.width/data.length);
-    let y=c.height-(v/100)*c.height;
-    i?ctx.lineTo(x,y):ctx.moveTo(x,y);
-  });
-  ctx.stroke();
-}
-
-function drawGauge(v){
-  const c=document.getElementById("gauge");
-  const ctx=c.getContext("2d");
-  ctx.clearRect(0,0,c.width,c.height);
-
-  let max=200;
-  let angle=(v/max)*Math.PI;
-
-  ctx.beginPath();
-  ctx.arc(150,150,100,Math.PI,Math.PI+angle);
-  ctx.stroke();
-}
 </script>
 
 </body>
