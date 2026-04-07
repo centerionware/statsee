@@ -48,25 +48,40 @@ button {background:#3b82f6;color:white;font-weight:bold;padding:0.5rem 1rem;bord
 <script>
 let ws = new WebSocket(`ws://${location.host}/ws`);
 
-const cpuChart = new Chart(document.getElementById('cpuChart').getContext('2d'), {type:'line',
-data:{labels:[],datasets:[{label:'CPU %',data:[],borderColor:'red',fill:false}]},
-options:{animation:false,scales:{y:{min:0,max:100}}}});
+// CPU
+const cpuChart = new Chart(document.getElementById('cpuChart').getContext('2d'), {
+	type:'line',
+	data:{labels:[],datasets:[{label:'CPU %',data:[],borderColor:'red',fill:false}]},
+	options:{animation:false,scales:{y:{min:0,max:100}}}
+});
 
-const ramChart = new Chart(document.getElementById('ramChart').getContext('2d'), {type:'line',
-data:{labels:[],datasets:[{label:'Used MB',data:[],borderColor:'orange',fill:false},{label:'Free MB',data:[],borderColor:'green',fill:false}]},
-options:{animation:false,scales:{y:{min:0}}}});
+// RAM
+const ramChart = new Chart(document.getElementById('ramChart').getContext('2d'), {
+	type:'line',
+	data:{labels:[],datasets:[{label:'Used MB',data:[],borderColor:'orange',fill:false},{label:'Free MB',data:[],borderColor:'green',fill:false}]},
+	options:{animation:false,scales:{y:{min:0}}}
+});
 
-const diskChart = new Chart(document.getElementById('diskChart').getContext('2d'), {type:'line',
-data:{labels:[],datasets:[{label:'Read MB',data:[],borderColor:'cyan',fill:false},{label:'Write MB',data:[],borderColor:'magenta',fill:false}]},
-options:{animation:false,scales:{y:{min:0}}}});
+// Disk
+const diskChart = new Chart(document.getElementById('diskChart').getContext('2d'), {
+	type:'line',
+	data:{labels:[],datasets:[{label:'Read MB',data:[],borderColor:'cyan',fill:false},{label:'Write MB',data:[],borderColor:'magenta',fill:false}]},
+	options:{animation:false,scales:{y:{min:0}}}
+});
 
-const netChart = new Chart(document.getElementById('netChart').getContext('2d'), {type:'line',
-data:{labels:[],datasets:[{label:'Ingress MB/s',data:[],borderColor:'lime',fill:false},{label:'Egress MB/s',data:[],borderColor:'yellow',fill:false}]},
-options:{animation:false,scales:{y:{min:0}}}});
+// Network
+const netChart = new Chart(document.getElementById('netChart').getContext('2d'), {
+	type:'line',
+	data:{labels:[],datasets:[{label:'Ingress MB/s',data:[],borderColor:'lime',fill:false},{label:'Egress MB/s',data:[],borderColor:'yellow',fill:false}]},
+	options:{animation:false,scales:{y:{min:0}}}
+});
 
-const speedChart = new Chart(document.getElementById('speedChart').getContext('2d'), {type:'doughnut',
-data:{labels:['Download','Upload'],datasets:[{label:'Speed Test',data:[0,0],backgroundColor:['blue','red']}]},
-options:{responsive:true,plugins:{legend:{position:'bottom'}}}});
+// Speed Test
+const speedChart = new Chart(document.getElementById('speedChart').getContext('2d'), {
+	type:'doughnut',
+	data:{labels:['Download','Upload'],datasets:[{label:'Speed Test',data:[0,0],backgroundColor:['blue','red']}]},
+	options:{responsive:true,plugins:{legend:{position:'bottom'}}}
+});
 
 async function loadNetworkTotals(){
   try{
@@ -83,45 +98,53 @@ loadNetworkTotals();
 setInterval(loadNetworkTotals,60000);
 
 ws.onmessage = e=>{
-  let msg=JSON.parse(e.data);
-  const ts=new Date().toLocaleTimeString();
+	let msg=JSON.parse(e.data);
+	const ts=new Date().toLocaleTimeString();
 
-  if(msg.type==='stats'){
-    cpuChart.data.labels.push(ts);
-    cpuChart.data.datasets[0].data.push(msg.cpu);
-    if(cpuChart.data.labels.length>30){cpuChart.data.labels.shift();cpuChart.data.datasets[0].data.shift();}
-    cpuChart.update();
+	if(msg.type==='stats'){
+		// CPU
+		cpuChart.data.labels.push(ts);
+		cpuChart.data.datasets[0].data.push(msg.cpu);
+		if(cpuChart.data.labels.length>30){cpuChart.data.labels.shift();cpuChart.data.datasets[0].data.shift();}
+		cpuChart.update();
 
-    ramChart.data.labels.push(ts);
-    ramChart.data.datasets[0].data.push(msg.ram.used);
-    ramChart.data.datasets[1].data.push(msg.ram.free);
-    if(ramChart.data.labels.length>30){ramChart.data.labels.shift();ramChart.data.datasets[0].data.shift();ramChart.data.datasets[1].data.shift();}
-    ramChart.update();
+		// RAM
+		ramChart.data.labels.push(ts);
+		ramChart.data.datasets[0].data.push(msg.ram.used);
+		ramChart.data.datasets[1].data.push(msg.ram.free);
+		if(ramChart.data.labels.length>30){ramChart.data.labels.shift();ramChart.data.datasets[0].data.shift();ramChart.data.datasets[1].data.shift();}
+		ramChart.update();
 
-    let totalRead=0,totalWrite=0;
-    for(let k in msg.disk){totalRead+=msg.disk[k].ReadBytes/1024/1024; totalWrite+=msg.disk[k].WriteBytes/1024/1024;}
-    diskChart.data.labels.push(ts);
-    diskChart.data.datasets[0].data.push(totalRead);
-    diskChart.data.datasets[1].data.push(totalWrite);
-    if(diskChart.data.labels.length>30){diskChart.data.labels.shift();diskChart.data.datasets[0].data.shift();diskChart.data.datasets[1].data.shift();}
-    diskChart.update();
+		// Disk
+		let totalRead=0,totalWrite=0;
+		for(let k in msg.disk){totalRead+=msg.disk[k].ReadBytes/1024/1024; totalWrite+=msg.disk[k].WriteBytes/1024/1024;}
+		diskChart.data.labels.push(ts);
+		diskChart.data.datasets[0].data.push(totalRead);
+		diskChart.data.datasets[1].data.push(totalWrite);
+		if(diskChart.data.labels.length>30){diskChart.data.labels.shift();diskChart.data.datasets[0].data.shift();diskChart.data.datasets[1].data.shift();}
+		diskChart.update();
 
-    let totalIn=0,totalOut=0;
-    for(let k in msg.net){totalIn+=msg.net[k].rate_recv; totalOut+=msg.net[k].rate_sent;}
-    netChart.data.labels.push(ts);
-    netChart.data.datasets[0].data.push(totalIn);
-    netChart.data.datasets[1].data.push(totalOut);
-    if(netChart.data.labels.length>30){netChart.data.labels.shift();netChart.data.datasets[0].data.shift();netChart.data.datasets[1].data.shift();}
-    netChart.update();
-  } else if(msg.type==='speedtest_done'){
-    speedChart.data.datasets[0].data=[msg.download,msg.upload];
-    speedChart.update();
-    document.getElementById('speedResult').innerText = `Download: ${msg.download.toFixed(2)} MB/s, Upload: ${msg.upload.toFixed(2)} MB/s`;
-  }
+		// Network
+		let totalIn=0,totalOut=0;
+		for(let k in msg.net){totalIn+=msg.net[k].rate_recv; totalOut+=msg.net[k].rate_sent;}
+		netChart.data.labels.push(ts);
+		netChart.data.datasets[0].data.push(totalIn);
+		netChart.data.datasets[1].data.push(totalOut);
+		if(netChart.data.labels.length>30){netChart.data.labels.shift();netChart.data.datasets[0].data.shift();netChart.data.datasets[1].data.shift();}
+		netChart.update();
+
+	} else if(msg.type==='speedtest_update'){
+		speedChart.data.datasets[0].data=[msg.download,msg.upload];
+		speedChart.update();
+	} else if(msg.type==='speedtest_done'){
+		speedChart.data.datasets[0].data=[msg.download,msg.upload];
+		speedChart.update();
+		document.getElementById('speedResult').innerText=`Download: ${msg.download.toFixed(2)} MB/s, Upload: ${msg.upload.toFixed(2)} MB/s`;
+	}
 };
 
 document.getElementById('startSpeedBtn').addEventListener('click',()=>{
-  ws.send(JSON.stringify({type:'speedtest'}));
+	ws.send(JSON.stringify({type:'speedtest'}));
 });
 </script>
 </body>

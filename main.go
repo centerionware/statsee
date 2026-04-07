@@ -27,6 +27,8 @@ var (
 	wsClients = make(map[*websocket.Conn]bool)
 	wsLock    sync.Mutex
 	upgrader  = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	prevNet   = make(map[string]net.IOCountersStat)
+	prevTime  = time.Now()
 )
 
 type NetTotals struct {
@@ -35,9 +37,6 @@ type NetTotals struct {
 	MonthlyIn  float64 `json:"monthly_in"`
 	MonthlyOut float64 `json:"monthly_out"`
 }
-
-var prevNet = make(map[string]net.IOCountersStat)
-var prevTime = time.Now()
 
 func main() {
 	var err error
@@ -52,6 +51,7 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Serve index.html at /
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		data, err := fs.ReadFile(subFS, "index.html")
 		if err != nil {
@@ -69,37 +69,40 @@ func main() {
 		json.NewEncoder(w).Encode(totals)
 	})
 
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		wsLock.Lock()
-		wsClients[conn] = true
-		wsLock.Unlock()
+	http.HandleFunc("/ws", wsHandler)
 
-		defer func() {
-			wsLock.Lock()
-			delete(wsClients, conn)
-			wsLock.Unlock()
-			conn.Close()
-		}()
-
-		for {
-			var msg map[string]string
-			if err := conn.ReadJSON(&msg); err != nil {
-				return
-			}
-			if msg["type"] == "speedtest" {
-				go runSpeedTest(conn)
-			}
-		}
-	})
-
+	// Start background stats collector
 	go startCollector()
 
 	log.Println("StatSee running on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func wsHandler(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	wsLock.Lock()
+	wsClients[conn] = true
+	wsLock.Unlock()
+
+	defer func() {
+		wsLock.Lock()
+		delete(wsClients, conn)
+		wsLock.Unlock()
+		conn.Close()
+	}()
+
+	for {
+		var msg map[string]string
+		if err := conn.ReadJSON(&msg); err != nil {
+			return
+		}
+		if msg["type"] == "speedtest" {
+			go runSpeedTest(conn)
+		}
+	}
 }
 
 func startCollector() {
@@ -111,11 +114,18 @@ func startCollector() {
 
 func collectStats() {
 	ts := time.Now().Unix()
-	cpuPercent, _ := cpu.Percent(0, false)
-	memStat, _ := mem.VirtualMemory()
-	diskIO, _ := disk.IOCounters()
-	netIO, _ := net.IOCounters(true)
 
+	// CPU
+	cpuPercent, _ := cpu.Percent(0, false)
+
+	// RAM
+	memStat, _ := mem.VirtualMemory()
+
+	// Disk
+	diskIO, _ := disk.IOCounters()
+
+	// Network
+	netIO, _ := net.IOCounters(true)
 	elapsed := time.Since(prevTime).Seconds()
 	netRates := make(map[string]map[string]float64)
 
@@ -129,16 +139,15 @@ func collectStats() {
 		}
 		rxRate := float64(nic.BytesRecv-prev.BytesRecv) / elapsed / 1024 / 1024
 		txRate := float64(nic.BytesSent-prev.BytesSent) / elapsed / 1024 / 1024
-
 		netRates[nic.Name] = map[string]float64{
 			"rate_recv": rxRate,
 			"rate_sent": txRate,
 		}
-
 		prevNet[nic.Name] = nic
 	}
 	prevTime = time.Now()
 
+	// Store totals in DB
 	db.Update(func(tx *bolt.Tx) error {
 		b, _ := tx.CreateBucketIfNotExists([]byte("net"))
 		for _, nic := range netIO {
@@ -153,6 +162,7 @@ func collectStats() {
 		return nil
 	})
 
+	// Broadcast to websocket clients
 	msg := map[string]interface{}{
 		"type": "stats",
 		"ts":   ts,
@@ -198,7 +208,7 @@ func getNetworkTotals() map[string]NetTotals {
 
 func runSpeedTest(conn *websocket.Conn) {
 	const duration = 10 * time.Second
-	ticker := time.NewTicker(time.Duration(500) * time.Millisecond)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	start := time.Now()
 	var downloads, uploads []float64
@@ -207,12 +217,12 @@ func runSpeedTest(conn *websocket.Conn) {
 		if time.Since(start) > duration {
 			break
 		}
+		// Simulated speeds (replace with real network test if needed)
 		d := 50 + rand.Float64()*200
 		u := 20 + rand.Float64()*100
 		downloads = append(downloads, d)
 		uploads = append(uploads, u)
-		conn.WriteJSON(map[string]interface{}{"type": "download", "value": d})
-		conn.WriteJSON(map[string]interface{}{"type": "upload", "value": u})
+		conn.WriteJSON(map[string]interface{}{"type": "speedtest_update", "download": d, "upload": u})
 	}
 
 	avgDownload := average(downloads)
