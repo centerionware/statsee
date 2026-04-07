@@ -32,7 +32,7 @@ var (
 
 	prevRx   uint64
 	prevTx   uint64
-	prevTime = time.Now()
+	prevTime time.Time
 
 	iface = getInterface()
 )
@@ -48,7 +48,7 @@ func getInterface() string {
 	if v := os.Getenv("NET_IFACE"); v != "" {
 		return v
 	}
-	return "eth0" // fallback default
+	return "eth0"
 }
 
 func main() {
@@ -58,6 +58,9 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
+
+	log.Println("Using interface:", iface)
+	debugNet()
 
 	subFS, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -84,8 +87,19 @@ func main() {
 
 	go startCollector()
 
-	log.Println("StatSee running on :8080 (iface:", iface, ")")
+	log.Println("StatSee running on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func debugNet() {
+	data, err := os.ReadFile("/host/proc/net/dev")
+	if err != nil {
+		log.Println("FAILED to read /host/proc/net/dev:", err)
+		return
+	}
+	log.Println("==== /host/proc/net/dev ====")
+	log.Println(string(data))
+	log.Println("================================")
 }
 
 func wsHandler(w http.ResponseWriter, r *http.Request) {
@@ -161,30 +175,53 @@ func collectStats() {
 	diskIO, _ := disk.IOCounters()
 
 	rx, tx, err := readHostNetDev()
+
+	var rxRate, txRate float64
+	now := time.Now()
+
 	if err != nil {
 		log.Println("net read error:", err)
-		return
-	}
-
-	elapsed := time.Since(prevTime).Seconds()
-
-	rxRate := float64(rx-prevRx) / elapsed / 1024 / 1024
-	txRate := float64(tx-prevTx) / elapsed / 1024 / 1024
-
-	prevRx = rx
-	prevTx = tx
-	prevTime = time.Now()
-
-	db.Update(func(txn *bolt.Tx) error {
-		b, _ := txn.CreateBucketIfNotExists([]byte("net"))
-		v := map[string]float64{
-			"in":  float64(rx) / 1024 / 1024 / 1024,
-			"out": float64(tx) / 1024 / 1024 / 1024,
+	} else {
+		if prevTime.IsZero() {
+			prevRx = rx
+			prevTx = tx
+			prevTime = now
+			return
 		}
-		data, _ := json.Marshal(v)
-		b.Put([]byte(iface), data)
-		return nil
-	})
+
+		elapsed := now.Sub(prevTime).Seconds()
+		if elapsed <= 0 {
+			return
+		}
+
+		if rx < prevRx || tx < prevTx {
+			prevRx = rx
+			prevTx = tx
+			prevTime = now
+			return
+		}
+
+		rxDelta := float64(rx - prevRx)
+		txDelta := float64(tx - prevTx)
+
+		rxRate = rxDelta / elapsed / 1024 / 1024
+		txRate = txDelta / elapsed / 1024 / 1024
+
+		prevRx = rx
+		prevTx = tx
+		prevTime = now
+
+		db.Update(func(txn *bolt.Tx) error {
+			b, _ := txn.CreateBucketIfNotExists([]byte("net"))
+			v := map[string]float64{
+				"in":  float64(rx) / 1024 / 1024 / 1024,
+				"out": float64(tx) / 1024 / 1024 / 1024,
+			}
+			data, _ := json.Marshal(v)
+			b.Put([]byte(iface), data)
+			return nil
+		})
+	}
 
 	msg := map[string]interface{}{
 		"type": "stats",
@@ -195,9 +232,11 @@ func collectStats() {
 			"free": float64(memStat.Available) / 1024 / 1024,
 		},
 		"disk": diskIO,
-		"net": map[string]float64{
-			"rate_recv": rxRate,
-			"rate_sent": txRate,
+		"net": map[string]interface{}{
+			iface: map[string]float64{
+				"rate_recv": rxRate,
+				"rate_sent": txRate,
+			},
 		},
 	}
 
