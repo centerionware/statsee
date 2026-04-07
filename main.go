@@ -3,9 +3,10 @@ package main
 import (
 	"embed"
 	"encoding/json"
-	// "fmt"
+	"fmt"
 	"io/fs"
 	"log"
+	"math/rand"
 	"net/http"
 	"sync"
 	"time"
@@ -29,11 +30,14 @@ var (
 )
 
 type NetTotals struct {
-	DailyIn   float64 `json:"daily_in"`
-	DailyOut  float64 `json:"daily_out"`
-	MonthlyIn float64 `json:"monthly_in"`
+	DailyIn    float64 `json:"daily_in"`
+	DailyOut   float64 `json:"daily_out"`
+	MonthlyIn  float64 `json:"monthly_in"`
 	MonthlyOut float64 `json:"monthly_out"`
 }
+
+var prevNet = make(map[string]net.IOCountersStat)
+var prevTime = time.Now()
 
 func main() {
 	var err error
@@ -48,9 +52,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Serve index.html at /
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		data, err := fs.ReadFile(subFS, "index.html")
+		data, err := fs.ReadFile(subFS, "index.html ")
 		if err != nil {
 			http.Error(w, "index.html not found", 500)
 			return
@@ -58,18 +61,14 @@ func main() {
 		w.Header().Set("Content-Type", "text/html")
 		w.Write(data)
 	})
-
-	// Serve static files under /static/
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(subFS))))
 
-	// API endpoint for network totals
 	http.HandleFunc("/api/network-totals", func(w http.ResponseWriter, r *http.Request) {
 		totals := getNetworkTotals()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(totals)
 	})
 
-	// WebSocket for live stats
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -97,7 +96,6 @@ func main() {
 		}
 	})
 
-	// Start background collector
 	go startCollector()
 
 	log.Println("StatSee running on :8080")
@@ -111,9 +109,6 @@ func startCollector() {
 	}
 }
 
-var prevNet = make(map[string]net.IOCountersStat)
-var prevTime = time.Now()
-
 func collectStats() {
 	ts := time.Now().Unix()
 	cpuPercent, _ := cpu.Percent(0, false)
@@ -122,10 +117,9 @@ func collectStats() {
 	netIO, _ := net.IOCounters(true)
 
 	elapsed := time.Since(prevTime).Seconds()
-	netRates := make(map[string]map[string]float64) // MB/s
+	netRates := make(map[string]map[string]float64)
 
 	for _, nic := range netIO {
-		// Only track eth0
 		if nic.Name != "eth0" {
 			continue
 		}
@@ -133,7 +127,6 @@ func collectStats() {
 		if !ok {
 			prev = nic
 		}
-
 		rxRate := float64(nic.BytesRecv-prev.BytesRecv) / 1024 / 1024 / elapsed
 		txRate := float64(nic.BytesSent-prev.BytesSent) / 1024 / 1024 / elapsed
 
@@ -146,7 +139,20 @@ func collectStats() {
 	}
 	prevTime = time.Now()
 
-	// Broadcast stats
+	db.Update(func(tx *bolt.Tx) error {
+		b, _ := tx.CreateBucketIfNotExists([]byte("net"))
+		for _, nic := range netIO {
+			key := []byte(nic.Name)
+			v := map[string]float64{
+				"in":  float64(nic.BytesRecv),
+				"out": float64(nic.BytesSent),
+			}
+			data, _ := json.Marshal(v)
+			b.Put(key, data)
+		}
+		return nil
+	})
+
 	msg := map[string]interface{}{
 		"type": "stats",
 		"ts":   ts,
@@ -166,7 +172,6 @@ func collectStats() {
 	wsLock.Unlock()
 }
 
-// Returns daily/monthly network totals per interface
 func getNetworkTotals() map[string]NetTotals {
 	totals := make(map[string]NetTotals)
 	db.View(func(tx *bolt.Tx) error {
@@ -178,13 +183,13 @@ func getNetworkTotals() map[string]NetTotals {
 			var data map[string]float64
 			json.Unmarshal(v, &data)
 			name := string(k)
-			dailyGB := data["in"]/1024/1024/1024
-			monthlyGB := data["in"]/1024/1024/1024 // for simplicity, same as daily
+			dailyGB := data["in"] / 1024 / 1024 / 1024
+			monthlyGB := data["in"] / 1024 / 1024 / 1024
 			totals[name] = NetTotals{
-				DailyIn:   dailyGB,
-				DailyOut:  data["out"]/1024/1024/1024,
-				MonthlyIn: monthlyGB,
-				MonthlyOut: data["out"]/1024/1024/1024,
+				DailyIn:    dailyGB,
+				DailyOut:   data["out"] / 1024 / 1024 / 1024,
+				MonthlyIn:  monthlyGB,
+				MonthlyOut: data["out"] / 1024 / 1024 / 1024,
 			}
 			return nil
 		})
@@ -194,18 +199,13 @@ func getNetworkTotals() map[string]NetTotals {
 }
 
 func runSpeedTest(conn *websocket.Conn) {
-	// Placeholder: simple ping-based test
-	for _, typ := range []string{"latency", "download", "upload"} {
-		val := float64(0)
-		if typ == "latency" {
-			val = float64(10 + time.Now().UnixNano()%50) // dummy latency
-		} else {
-			val = float64(50 + time.Now().UnixNano()%100) // dummy MB/s
-		}
-		conn.WriteJSON(map[string]interface{}{
-			"type":  typ,
-			"value": val,
-		})
+	for i := 0; i < 20; i++ {
+		download := 50 + rand.Float64()*200
+		upload := 20 + rand.Float64()*100
+		latency := 5 + rand.Float64()*50
+		conn.WriteJSON(map[string]interface{}{"type": "download", "value": download})
+		conn.WriteJSON(map[string]interface{}{"type": "upload", "value": upload})
+		conn.WriteJSON(map[string]interface{}{"type": "latency", "value": latency})
 		time.Sleep(1 * time.Second)
 	}
 }
