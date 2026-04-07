@@ -153,8 +153,8 @@ func collectStats() {
 		for _, nic := range netIO {
 			key := []byte(nic.Name)
 			v := map[string]float64{
-				"in":  float64(nic.BytesRecv) / 1024 / 1024 / 1024,
-				"out": float64(nic.BytesSent) / 1024 / 1024 / 1024,
+				"in":  float64(nic.BytesRecv) / 1024 / 1024,
+				"out": float64(nic.BytesSent) / 1024 / 1024,
 			}
 			data, _ := json.Marshal(v)
 			b.Put(key, data)
