@@ -3,7 +3,6 @@ package main
 import (
 	"embed"
 	"encoding/json"
-	// "fmt"
 	"io/fs"
 	"log"
 	"math/rand"
@@ -51,7 +50,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Serve index.html at /
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		data, err := fs.ReadFile(subFS, "index.html")
 		if err != nil {
@@ -71,7 +69,6 @@ func main() {
 
 	http.HandleFunc("/ws", wsHandler)
 
-	// Start background stats collector
 	go startCollector()
 
 	log.Println("StatSee running on :8080")
@@ -113,20 +110,16 @@ func startCollector() {
 }
 
 func collectStats() {
-	ts := time.Now().Unix()
-
-	// CPU
-	cpuPercent, _ := cpu.Percent(0, false)
-
-	// RAM
-	memStat, _ := mem.VirtualMemory()
-
-	// Disk
-	diskIO, _ := disk.IOCounters()
-
-	// Network
+	// 1. Snapshot time and network counters IMMEDIATELY together
+	now := time.Now()
 	netIO, _ := net.IOCounters(true)
-	elapsed := time.Since(prevTime).Seconds()
+	elapsed := now.Sub(prevTime).Seconds()
+
+	// Handle first run / zero elapsed
+	if elapsed <= 0 {
+		elapsed = 1.0
+	}
+
 	netRates := make(map[string]map[string]float64)
 
 	for _, nic := range netIO {
@@ -135,17 +128,29 @@ func collectStats() {
 		}
 		prev, ok := prevNet[nic.Name]
 		if !ok {
-			prev = nic
+			prevNet[nic.Name] = nic
+			continue
 		}
+
+		// Calculate rate based on exact time difference between snapshots
 		rxRate := float64(nic.BytesRecv-prev.BytesRecv) / elapsed / 1024 / 1024
 		txRate := float64(nic.BytesSent-prev.BytesSent) / elapsed / 1024 / 1024
+
 		netRates[nic.Name] = map[string]float64{
 			"rate_recv": rxRate,
 			"rate_sent": txRate,
 		}
 		prevNet[nic.Name] = nic
 	}
-	prevTime = time.Now()
+
+	// Update prevTime to the exact moment we sampled the counters
+	prevTime = now
+
+	// 2. Perform slower/blocking collection tasks AFTER the network delta is calculated
+	cpuPercent, _ := cpu.Percent(0, false)
+	memStat, _ := mem.VirtualMemory()
+	diskIO, _ := disk.IOCounters()
+	ts := now.Unix()
 
 	// Store totals in DB
 	db.Update(func(tx *bolt.Tx) error {
@@ -217,7 +222,6 @@ func runSpeedTest(conn *websocket.Conn) {
 		if time.Since(start) > duration {
 			break
 		}
-		// Simulated speeds (replace with real network test if needed)
 		d := 50 + rand.Float64()*200
 		u := 20 + rand.Float64()*100
 		downloads = append(downloads, d)
