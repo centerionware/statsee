@@ -138,33 +138,22 @@ func startCollector() {
 }
 
 func readHostNetDev() (uint64, uint64, error) {
-	file, err := os.Open("/host/proc/net/dev")
+	base := "/host/sys/class/net/" + iface + "/statistics"
+
+	rxBytes, err := os.ReadFile(base + "/rx_bytes")
 	if err != nil {
 		return 0, 0, err
 	}
-	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	for i := 0; scanner.Scan(); i++ {
-		line := strings.TrimSpace(scanner.Text())
-		if i < 2 {
-			continue
-		}
-
-		fields := strings.Fields(line)
-		if len(fields) < 17 {
-			continue
-		}
-
-		name := strings.TrimSuffix(fields[0], ":")
-		if name == iface {
-			rx, _ := strconv.ParseUint(fields[1], 10, 64)
-			tx, _ := strconv.ParseUint(fields[9], 10, 64)
-			return rx, tx, nil
-		}
+	txBytes, err := os.ReadFile(base + "/tx_bytes")
+	if err != nil {
+		return 0, 0, err
 	}
 
-	return 0, 0, os.ErrNotExist
+	rx, _ := strconv.ParseUint(strings.TrimSpace(string(rxBytes)), 10, 64)
+	tx, _ := strconv.ParseUint(strings.TrimSpace(string(txBytes)), 10, 64)
+
+	return rx, tx, nil
 }
 
 func collectStats() {
