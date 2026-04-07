@@ -74,8 +74,8 @@ func main() {
 
 	go startCollector()
 
-	log.Println("StatSee running on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Println("StatSee running on :18080")
+	log.Fatal(http.ListenAndServe(":18080", nil))
 }
 
 func wsHandler(w http.ResponseWriter, r *http.Request) {

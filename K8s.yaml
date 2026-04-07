@@ -20,19 +20,21 @@ spec:
       labels:
         app: dashboard
     spec:
+      hostNetwork: true
+      hostPID: true
       containers:
         - name: dashboard
           image: ghcr.io/centerionware/statsee:latest
           ports:
-            - containerPort: 8080
+            - containerPort: 18080
           securityContext:
             privileged: true
           volumeMounts:
             - name: proc
-              mountPath: /host/proc
+              mountPath: /proc
               readOnly: true
             - name: sys
-              mountPath: /host/sys
+              mountPath: /sys
               readOnly: true
       volumes:
         - name: proc
@@ -41,7 +43,6 @@ spec:
         - name: sys
           hostPath:
             path: /sys
-
 ---
 apiVersion: v1
 kind: Service
@@ -56,6 +57,6 @@ spec:
     app: dashboard
   ports:
     - port: 80
-      targetPort: 8080
+      targetPort: 18080
       protocol: TCP
   type: ClusterIP
