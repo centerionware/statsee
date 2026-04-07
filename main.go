@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"embed"
 	"encoding/json"
 	"io/fs"
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,7 +18,6 @@ import (
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/mem"
-	"github.com/shirou/gopsutil/v3/net"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -26,11 +29,12 @@ var (
 	wsClients = make(map[*websocket.Conn]bool)
 	wsLock    sync.Mutex
 	upgrader  = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
-	
-	// Stats tracking
-	statsLock sync.Mutex
-	prevNet   = make(map[string]net.IOCountersStat)
-	prevTime  time.Time // Start empty
+
+	prevRx   uint64
+	prevTx   uint64
+	prevTime = time.Now()
+
+	iface = getInterface()
 )
 
 type NetTotals struct {
@@ -38,6 +42,13 @@ type NetTotals struct {
 	DailyOut   float64 `json:"daily_out"`
 	MonthlyIn  float64 `json:"monthly_in"`
 	MonthlyOut float64 `json:"monthly_out"`
+}
+
+func getInterface() string {
+	if v := os.Getenv("NET_IFACE"); v != "" {
+		return v
+	}
+	return "eth0" // fallback default
 }
 
 func main() {
@@ -62,20 +73,19 @@ func main() {
 		w.Header().Set("Content-Type", "text/html")
 		w.Write(data)
 	})
+
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(subFS))))
 
 	http.HandleFunc("/api/network-totals", func(w http.ResponseWriter, r *http.Request) {
-		totals := getNetworkTotals()
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(totals)
+		json.NewEncoder(w).Encode(getNetworkTotals())
 	})
 
 	http.HandleFunc("/ws", wsHandler)
 
 	go startCollector()
 
-	log.Println("StatSee running on :18080")
-	log.Fatal(http.ListenAndServe(":18080", nil))
+	log.Println("StatSee running on :8080 (iface:", iface, ")")
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
 func wsHandler(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +93,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+
 	wsLock.Lock()
 	wsClients[conn] = true
 	wsLock.Unlock()
@@ -112,73 +123,69 @@ func startCollector() {
 	}
 }
 
+func readHostNetDev() (uint64, uint64, error) {
+	file, err := os.Open("/host/proc/net/dev")
+	if err != nil {
+		return 0, 0, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for i := 0; scanner.Scan(); i++ {
+		line := strings.TrimSpace(scanner.Text())
+		if i < 2 {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 17 {
+			continue
+		}
+
+		name := strings.TrimSuffix(fields[0], ":")
+		if name == iface {
+			rx, _ := strconv.ParseUint(fields[1], 10, 64)
+			tx, _ := strconv.ParseUint(fields[9], 10, 64)
+			return rx, tx, nil
+		}
+	}
+
+	return 0, 0, os.ErrNotExist
+}
+
 func collectStats() {
-	statsLock.Lock()
-	defer statsLock.Unlock()
+	ts := time.Now().Unix()
 
-	now := time.Now()
-	netIO, _ := net.IOCounters(true)
-
-	// If this is the very first run, just seed the data and exit
-	if prevTime.IsZero() {
-		prevTime = now
-		for _, nic := range netIO {
-			prevNet[nic.Name] = nic
-		}
-		return
-	}
-
-	elapsed := now.Sub(prevTime).Seconds()
-	if elapsed <= 0 {
-		elapsed = 1.0
-	}
-
-	netRates := make(map[string]map[string]float64)
-	for _, nic := range netIO {
-		if nic.Name != "enp0s6" {
-			continue
-		}
-		prev, ok := prevNet[nic.Name]
-		if !ok {
-			prevNet[nic.Name] = nic
-			continue
-		}
-
-		// Calculation: (NewBytes - OldBytes) / Seconds / 1024 / 1024 = MB/s
-		rxRate := float64(nic.BytesRecv-prev.BytesRecv) / elapsed / 1024 / 1024
-		txRate := float64(nic.BytesSent-prev.BytesSent) / elapsed / 1024 / 1024
-
-		netRates[nic.Name] = map[string]float64{
-			"rate_recv": rxRate,
-			"rate_sent": txRate,
-		}
-		prevNet[nic.Name] = nic
-	}
-
-	prevTime = now
-
-	// Collect other stats AFTER timing calculation
 	cpuPercent, _ := cpu.Percent(0, false)
 	memStat, _ := mem.VirtualMemory()
 	diskIO, _ := disk.IOCounters()
-	ts := now.Unix()
 
-	// Update DB
-	db.Update(func(tx *bolt.Tx) error {
-		b, _ := tx.CreateBucketIfNotExists([]byte("net"))
-		for _, nic := range netIO {
-			key := []byte(nic.Name)
-			v := map[string]float64{
-				"in":  float64(nic.BytesRecv) / 1024 / 1024 / 1024, // Store as GB in DB
-				"out": float64(nic.BytesSent) / 1024 / 1024 / 1024, // Store as GB in DB
-			}
-			data, _ := json.Marshal(v)
-			b.Put(key, data)
+	rx, tx, err := readHostNetDev()
+	if err != nil {
+		log.Println("net read error:", err)
+		return
+	}
+
+	elapsed := time.Since(prevTime).Seconds()
+
+	rxRate := float64(rx-prevRx) / elapsed / 1024 / 1024
+	txRate := float64(tx-prevTx) / elapsed / 1024 / 1024
+
+	prevRx = rx
+	prevTx = tx
+	prevTime = time.Now()
+
+	db.Update(func(txn *bolt.Tx) error {
+		b, _ := txn.CreateBucketIfNotExists([]byte("net"))
+		v := map[string]float64{
+			"in":  float64(rx) / 1024 / 1024 / 1024,
+			"out": float64(tx) / 1024 / 1024 / 1024,
 		}
+		data, _ := json.Marshal(v)
+		b.Put([]byte(iface), data)
 		return nil
 	})
 
-	// Broadcast
 	msg := map[string]interface{}{
 		"type": "stats",
 		"ts":   ts,
@@ -188,7 +195,10 @@ func collectStats() {
 			"free": float64(memStat.Available) / 1024 / 1024,
 		},
 		"disk": diskIO,
-		"net":  netRates,
+		"net": map[string]float64{
+			"rate_recv": rxRate,
+			"rate_sent": txRate,
+		},
 	}
 
 	wsLock.Lock()
@@ -226,6 +236,7 @@ func runSpeedTest(conn *websocket.Conn) {
 	const duration = 10 * time.Second
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+
 	start := time.Now()
 	var downloads, uploads []float64
 
@@ -233,16 +244,25 @@ func runSpeedTest(conn *websocket.Conn) {
 		if time.Since(start) > duration {
 			break
 		}
+
 		d := 50 + rand.Float64()*200
 		u := 20 + rand.Float64()*100
+
 		downloads = append(downloads, d)
 		uploads = append(uploads, u)
-		conn.WriteJSON(map[string]interface{}{"type": "speedtest_update", "download": d, "upload": u})
+
+		conn.WriteJSON(map[string]interface{}{
+			"type":     "speedtest_update",
+			"download": d,
+			"upload":   u,
+		})
 	}
 
-	avgDownload := average(downloads)
-	avgUpload := average(uploads)
-	conn.WriteJSON(map[string]interface{}{"type": "speedtest_done", "download": avgDownload, "upload": avgUpload})
+	conn.WriteJSON(map[string]interface{}{
+		"type":     "speedtest_done",
+		"download": average(downloads),
+		"upload":   average(uploads),
+	})
 }
 
 func average(vals []float64) float64 {
