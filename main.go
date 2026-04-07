@@ -135,7 +135,7 @@ func collectStats() {
 
 	netRates := make(map[string]map[string]float64)
 	for _, nic := range netIO {
-		if nic.Name != "eth0" {
+		if nic.Name != "enp0s6" {
 			continue
 		}
 		prev, ok := prevNet[nic.Name]
