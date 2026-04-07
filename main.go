@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bufio"
+	// "bufio"
 	"embed"
 	"encoding/json"
 	"io/fs"
