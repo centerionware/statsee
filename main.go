@@ -3,7 +3,7 @@ package main
 import (
 	"embed"
 	"encoding/json"
-	// "fmt"
+	"fmt"
 	"io/fs"
 	"log"
 	"math/rand"
@@ -53,7 +53,7 @@ func main() {
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		data, err := fs.ReadFile(subFS, "index.html ")
+		data, err := fs.ReadFile(subFS, "index.html")
 		if err != nil {
 			http.Error(w, "index.html not found", 500)
 			return
@@ -103,7 +103,7 @@ func main() {
 }
 
 func startCollector() {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	for range ticker.C {
 		collectStats()
 	}
@@ -127,8 +127,8 @@ func collectStats() {
 		if !ok {
 			prev = nic
 		}
-		rxRate := float64(nic.BytesRecv-prev.BytesRecv) / 1024 / 1024 / elapsed
-		txRate := float64(nic.BytesSent-prev.BytesSent) / 1024 / 1024 / elapsed
+		rxRate := float64(nic.BytesRecv-prev.BytesRecv) / elapsed / 1024 / 1024
+		txRate := float64(nic.BytesSent-prev.BytesSent) / elapsed / 1024 / 1024
 
 		netRates[nic.Name] = map[string]float64{
 			"rate_recv": rxRate,
@@ -144,8 +144,8 @@ func collectStats() {
 		for _, nic := range netIO {
 			key := []byte(nic.Name)
 			v := map[string]float64{
-				"in":  float64(nic.BytesRecv),
-				"out": float64(nic.BytesSent),
+				"in":  float64(nic.BytesRecv) / 1024 / 1024 / 1024,
+				"out": float64(nic.BytesSent) / 1024 / 1024 / 1024,
 			}
 			data, _ := json.Marshal(v)
 			b.Put(key, data)
@@ -183,13 +183,11 @@ func getNetworkTotals() map[string]NetTotals {
 			var data map[string]float64
 			json.Unmarshal(v, &data)
 			name := string(k)
-			dailyGB := data["in"] / 1024 / 1024 / 1024
-			monthlyGB := data["in"] / 1024 / 1024 / 1024
 			totals[name] = NetTotals{
-				DailyIn:    dailyGB,
-				DailyOut:   data["out"] / 1024 / 1024 / 1024,
-				MonthlyIn:  monthlyGB,
-				MonthlyOut: data["out"] / 1024 / 1024 / 1024,
+				DailyIn:    data["in"],
+				DailyOut:   data["out"],
+				MonthlyIn:  data["in"],
+				MonthlyOut: data["out"],
 			}
 			return nil
 		})
@@ -199,13 +197,37 @@ func getNetworkTotals() map[string]NetTotals {
 }
 
 func runSpeedTest(conn *websocket.Conn) {
-	for i := 0; i < 20; i++ {
-		download := 50 + rand.Float64()*200
-		upload := 20 + rand.Float64()*100
-		latency := 5 + rand.Float64()*50
-		conn.WriteJSON(map[string]interface{}{"type": "download", "value": download})
-		conn.WriteJSON(map[string]interface{}{"type": "upload", "value": upload})
-		conn.WriteJSON(map[string]interface{}{"type": "latency", "value": latency})
-		time.Sleep(1 * time.Second)
+	const duration = 10 * time.Second
+	const interval = 0.5 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	start := time.Now()
+	var downloads, uploads []float64
+
+	for range ticker.C {
+		if time.Since(start) > duration {
+			break
+		}
+		d := 50 + rand.Float64()*200
+		u := 20 + rand.Float64()*100
+		downloads = append(downloads, d)
+		uploads = append(uploads, u)
+		conn.WriteJSON(map[string]interface{}{"type": "download", "value": d})
+		conn.WriteJSON(map[string]interface{}{"type": "upload", "value": u})
 	}
+
+	avgDownload := average(downloads)
+	avgUpload := average(uploads)
+	conn.WriteJSON(map[string]interface{}{"type": "speedtest_done", "download": avgDownload, "upload": avgUpload})
+}
+
+func average(vals []float64) float64 {
+	if len(vals) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, v := range vals {
+		sum += v
+	}
+	return sum / float64(len(vals))
 }
