@@ -95,7 +95,7 @@ async function loadNetworkTotals(){
   }catch(e){console.error(e);}
 }
 loadNetworkTotals();
-setInterval(loadNetworkTotals,60000);
+setInterval(loadNetworkTotals,3000);
 
 ws.onmessage = e=>{
 	let msg=JSON.parse(e.data);
