@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
-	"github.com/shirou/gopsutil/v3/cpu"
-	"github.com/shirou/gopsutil/v3/disk"
-	"github.com/shirou/gopsutil/v3/mem"
-	"github.com/shirou/gopsutil/v3/net"
+	"://github.com"
+	"://github.com"
+	"://github.com"
+	"://github.com"
+	"://github.com"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -26,8 +26,11 @@ var (
 	wsClients = make(map[*websocket.Conn]bool)
 	wsLock    sync.Mutex
 	upgrader  = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	
+	// Stats tracking
+	statsLock sync.Mutex
 	prevNet   = make(map[string]net.IOCountersStat)
-	prevTime  = time.Now()
+	prevTime  time.Time // Start empty
 )
 
 type NetTotals struct {
@@ -110,18 +113,27 @@ func startCollector() {
 }
 
 func collectStats() {
-	// 1. Snapshot time and network counters IMMEDIATELY together
+	statsLock.Lock()
+	defer statsLock.Unlock()
+
 	now := time.Now()
 	netIO, _ := net.IOCounters(true)
-	elapsed := now.Sub(prevTime).Seconds()
 
-	// Handle first run / zero elapsed
+	// If this is the very first run, just seed the data and exit
+	if prevTime.IsZero() {
+		prevTime = now
+		for _, nic := range netIO {
+			prevNet[nic.Name] = nic
+		}
+		return
+	}
+
+	elapsed := now.Sub(prevTime).Seconds()
 	if elapsed <= 0 {
 		elapsed = 1.0
 	}
 
 	netRates := make(map[string]map[string]float64)
-
 	for _, nic := range netIO {
 		if nic.Name != "eth0" {
 			continue
@@ -132,7 +144,7 @@ func collectStats() {
 			continue
 		}
 
-		// Calculate rate based on exact time difference between snapshots
+		// Calculation: (NewBytes - OldBytes) / Seconds / 1024 / 1024 = MB/s
 		rxRate := float64(nic.BytesRecv-prev.BytesRecv) / elapsed / 1024 / 1024
 		txRate := float64(nic.BytesSent-prev.BytesSent) / elapsed / 1024 / 1024
 
@@ -143,23 +155,22 @@ func collectStats() {
 		prevNet[nic.Name] = nic
 	}
 
-	// Update prevTime to the exact moment we sampled the counters
 	prevTime = now
 
-	// 2. Perform slower/blocking collection tasks AFTER the network delta is calculated
+	// Collect other stats AFTER timing calculation
 	cpuPercent, _ := cpu.Percent(0, false)
 	memStat, _ := mem.VirtualMemory()
 	diskIO, _ := disk.IOCounters()
 	ts := now.Unix()
 
-	// Store totals in DB
+	// Update DB
 	db.Update(func(tx *bolt.Tx) error {
 		b, _ := tx.CreateBucketIfNotExists([]byte("net"))
 		for _, nic := range netIO {
 			key := []byte(nic.Name)
 			v := map[string]float64{
-				"in":  float64(nic.BytesRecv) / 1024 / 1024,
-				"out": float64(nic.BytesSent) / 1024 / 1024,
+				"in":  float64(nic.BytesRecv) / 1024 / 1024 / 1024, // Store as GB in DB
+				"out": float64(nic.BytesSent) / 1024 / 1024 / 1024, // Store as GB in DB
 			}
 			data, _ := json.Marshal(v)
 			b.Put(key, data)
@@ -167,7 +178,7 @@ func collectStats() {
 		return nil
 	})
 
-	// Broadcast to websocket clients
+	// Broadcast
 	msg := map[string]interface{}{
 		"type": "stats",
 		"ts":   ts,
