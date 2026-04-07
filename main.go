@@ -198,7 +198,6 @@ func getNetworkTotals() map[string]NetTotals {
 
 func runSpeedTest(conn *websocket.Conn) {
 	const duration = 10 * time.Second
-	const interval = 0.5 * time.Second
 	ticker := time.NewTicker(time.Duration(500) * time.Millisecond)
 	defer ticker.Stop()
 	start := time.Now()
