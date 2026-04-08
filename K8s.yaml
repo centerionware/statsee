@@ -3,6 +3,19 @@ kind: Namespace
 metadata:
   name: statsee
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dashboard-db
+  namespace: statsee
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local-path
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -22,10 +35,10 @@ spec:
     spec:
       containers:
         - name: dashboard
+          image: ghcr.io/centerionware/statsee:latest
           env:
             - name: NET_IFACE
               value: enp0s6
-          image: ghcr.io/centerionware/statsee:latest
           ports:
             - containerPort: 8080
           securityContext:
@@ -37,6 +50,8 @@ spec:
             - name: sys
               mountPath: /host/sys
               readOnly: true
+            - name: db
+              mountPath: /db
       volumes:
         - name: proc
           hostPath:
@@ -44,6 +59,9 @@ spec:
         - name: sys
           hostPath:
             path: /sys
+        - name: db
+          persistentVolumeClaim:
+            claimName: dashboard-db
 ---
 apiVersion: v1
 kind: Service
