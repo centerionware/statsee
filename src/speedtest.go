@@ -49,7 +49,7 @@ func (s *SpeedTestManager) run() {
 		return
 	}
 
-	servers, err := speedtest.FetchServers(user)
+	servers, err := speedtest.FetchServers()
 	if err != nil {
 		log.Println("[speedtest] server error:", err)
 		s.fail(err)
