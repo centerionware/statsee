@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/centerionware/statsee/src"
 )
@@ -43,8 +44,11 @@ func main() {
 // spaHandler serves static files from fsys, falls back to index.html for SPA routing
 func spaHandler(fsys fs.FS, fsHandler http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Try to open the requested file
-		f, err := fsys.Open(r.URL.Path)
+		// Normalize URL path: remove leading slash
+		path := strings.TrimPrefix(r.URL.Path, "/")
+
+		// Try to open requested file
+		f, err := fsys.Open(path)
 		if err == nil {
 			f.Close()
 			fsHandler.ServeHTTP(w, r)
