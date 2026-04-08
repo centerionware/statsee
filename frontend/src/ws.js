@@ -3,8 +3,8 @@ import { state } from './state.js';
 let ws;
 
 export function initWS() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
-
+  const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${protocol}://${location.host}/ws`);
   ws.onopen = () => {
     console.log('[WS] connected');
   };
