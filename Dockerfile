@@ -13,15 +13,15 @@ RUN npm run build
 FROM golang:1.23-alpine AS builder
 WORKDIR /app
 
+COPY . .
+
 # Init module if not present (safe)
-RUN [ -f go.mod ] || go mod init github.com/centerionware/statsee
+RUN go mod init 
 
 # Copy go files first (cache deps)
-COPY go.mod go.sum* ./
-RUN go mod tidy
+# COPY go.mod go.sum* ./
+# RUN go mod tidy
 
-# Copy full source
-COPY . .
 
 # Copy built frontend into static dir (for embed)
 COPY --from=frontend /frontend/dist ./static
