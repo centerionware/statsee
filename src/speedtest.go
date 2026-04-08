@@ -42,12 +42,12 @@ func (s *SpeedTestManager) run() {
 		"type": "speedtest_start",
 	})
 
-	user, err := speedtest.FetchUserInfo()
-	if err != nil {
-		log.Println("[speedtest] user error:", err)
-		s.fail(err)
-		return
-	}
+    //    user, err := speedtest.FetchUserInfo()
+    //    if err != nil {
+    //    	log.Println("[speedtest] user error:", err)
+    //    	s.fail(err)
+    //    	return
+    //    }
 
 	servers, err := speedtest.FetchServers()
 	if err != nil {
