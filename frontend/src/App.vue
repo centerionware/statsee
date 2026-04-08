@@ -16,7 +16,7 @@
 </template>
 
 <script setup>
-import { initWebSocket } from './store.js';
+import { initWS } from './ws.js';
 import { initConsoleCapture } from './console.js';
 
 import CpuChart from './components/CpuChart.vue';
@@ -27,5 +27,5 @@ import NetTotals from './components/NetworkTotals.vue';
 import SpeedTest from './components/SpeedTest.vue';
 import JSConsole from './components/JSConsole.vue'
 initConsoleCapture();
-initWebSocket();
+initWS();
 </script>
