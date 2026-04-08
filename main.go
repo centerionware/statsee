@@ -6,12 +6,7 @@ import (
 	"log"
 	"net/http"
 
-    "./src/cpu"
-    "./src/ram"
-    "./src/disk"
-    "./src/network"
-    "./src/speedtest"
-    "./src/db"
+    "github.com/centerionware/statsee/src"
 
 )
 
