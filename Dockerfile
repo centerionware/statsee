@@ -16,6 +16,7 @@ WORKDIR /app
 COPY . .
 
 # Init module if not present (safe)
+RUN apk add git 
 RUN go mod tidy
 
 # Copy go files first (cache deps)
