@@ -1,28 +1,59 @@
 import { reactive } from 'vue';
 
 export const consoleState = reactive({
-  logs: []
+  logs: [],
+  paused: false
 });
 
-function addLog(type, args) {
-  const message = args.map(a => {
+let buffer = [];
+
+function formatMessage(args) {
+  return args.map(a => {
     try {
-      return typeof a === 'object' ? JSON.stringify(a) : String(a);
+      return typeof a === 'object'
+        ? JSON.stringify(a, null, 2)
+        : String(a);
     } catch {
       return String(a);
     }
   }).join(' ');
+}
 
-  consoleState.logs.unshift({
-    type,
-    message,
-    time: new Date().toLocaleTimeString()
-  });
+function pushLog(entry) {
+  if (consoleState.paused) {
+    buffer.push(entry);
+    return;
+  }
 
-  // keep last 200 logs
+  consoleState.logs.unshift(entry);
+
   if (consoleState.logs.length > 200) {
     consoleState.logs.pop();
   }
+}
+
+export function togglePause() {
+  consoleState.paused = !consoleState.paused;
+
+  // flush buffer when resuming
+  if (!consoleState.paused && buffer.length > 0) {
+    consoleState.logs.unshift(...buffer.reverse());
+    buffer = [];
+
+    if (consoleState.logs.length > 200) {
+      consoleState.logs.length = 200;
+    }
+  }
+}
+
+function addLog(type, args) {
+  const entry = {
+    type,
+    message: formatMessage(args),
+    time: new Date().toLocaleTimeString()
+  };
+
+  pushLog(entry);
 }
 
 export function initConsoleCapture() {
@@ -45,12 +76,10 @@ export function initConsoleCapture() {
     origError(...args);
   };
 
-  // capture runtime errors
   window.addEventListener('error', (e) => {
     addLog('error', [e.message, e.filename, e.lineno]);
   });
 
-  // capture promise errors
   window.addEventListener('unhandledrejection', (e) => {
     addLog('error', ['Unhandled Promise:', e.reason]);
   });
