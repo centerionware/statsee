@@ -8,7 +8,7 @@
 <script setup>
 import { ref, watch, onMounted, nextTick } from 'vue';
 import Chart from 'chart.js/auto';
-import { store } from '../store.js';
+import { state } from '../state.js';
 
 const cpuCanvas = ref(null);
 let cpuChart = null;
@@ -23,12 +23,12 @@ onMounted(async () => {
   });
 });
 
-watch(() => store.stats, (stats) => {
-  if(!stats || !cpuChart) return;
-  const ts = new Date(stats.ts * 1000).toLocaleTimeString();
+watch(() => state.cpu, (cpu) => {
+  if (cpuChart == null) return;
+  const ts = new Date().toLocaleTimeString();
   cpuChart.data.labels.push(ts);
-  cpuChart.data.datasets[0].data.push(stats.cpu);
-  if(cpuChart.data.labels.length > 30) {
+  cpuChart.data.datasets[0].data.push(cpu);
+  if (cpuChart.data.labels.length > 30) {
     cpuChart.data.labels.shift();
     cpuChart.data.datasets[0].data.shift();
   }

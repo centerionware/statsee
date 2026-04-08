@@ -32,7 +32,7 @@ let currentSpeed = 0;
 let targetSpeed = 0;
 let mode = 'idle'; // download | upload
 
-const MAX_SPEED = 200; // adjust based on your infra
+const MAX_SPEED = 200;
 
 function runSpeedTest() {
   console.log('[UI] start speedtest');
@@ -41,28 +41,20 @@ function runSpeedTest() {
 
 function drawGauge() {
   ctx.clearRect(0, 0, 300, 180);
-
-  // arc
   ctx.beginPath();
   ctx.arc(150, 150, 120, Math.PI, 2 * Math.PI);
   ctx.lineWidth = 15;
   ctx.strokeStyle = '#ddd';
   ctx.stroke();
 
-  // needle
   const angle = Math.PI + (currentSpeed / MAX_SPEED) * Math.PI;
-
   ctx.beginPath();
   ctx.moveTo(150, 150);
-  ctx.lineTo(
-    150 + 100 * Math.cos(angle),
-    150 + 100 * Math.sin(angle)
-  );
+  ctx.lineTo(150 + 100 * Math.cos(angle), 150 + 100 * Math.sin(angle));
   ctx.lineWidth = 4;
   ctx.strokeStyle = mode === 'upload' ? 'red' : 'blue';
   ctx.stroke();
 
-  // center dot
   ctx.beginPath();
   ctx.arc(150, 150, 5, 0, 2 * Math.PI);
   ctx.fillStyle = '#000';
@@ -83,8 +75,6 @@ onMounted(() => {
 watch(() => state.speedTest, (msg) => {
   if (!msg) return;
 
-  console.log('[UI] speedtest update:', msg);
-
   if (msg.type === 'speedtest_start') {
     resultText.value = 'Running speed test...';
   }
@@ -96,7 +86,6 @@ watch(() => state.speedTest, (msg) => {
       speedLabel.value = `${targetSpeed.toFixed(2)} MB/s`;
       resultText.value = `Downloading...`;
     }
-
     if (msg.stage === 'upload') {
       mode = 'upload';
       targetSpeed = msg.upload || 0;

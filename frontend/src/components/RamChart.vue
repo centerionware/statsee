@@ -8,7 +8,7 @@
 <script setup>
 import { ref, watch, onMounted, nextTick } from 'vue';
 import Chart from 'chart.js/auto';
-import { store } from '../store.js';
+import { state } from '../state.js';
 
 const ramCanvas = ref(null);
 let ramChart = null;
@@ -26,17 +26,16 @@ onMounted(async () => {
   });
 });
 
-watch(() => store.stats, (stats) => {
-  if(!stats || !ramChart) return;
-  const ts = new Date(stats.ts * 1000).toLocaleTimeString();
+watch(() => state.ram, (ram) => {
+  if(!ramChart) return;
+  const ts = new Date().toLocaleTimeString();
   ramChart.data.labels.push(ts);
-  ramChart.data.datasets[0].data.push(stats.ram.used);
-  ramChart.data.datasets[1].data.push(stats.ram.free);
+  ramChart.data.datasets[0].data.push(ram.used);
+  ramChart.data.datasets[1].data.push(ram.free);
   if(ramChart.data.labels.length > 30) {
     ramChart.data.labels.shift();
-    ramChart.data.datasets[0].data.shift();
-    ramChart.data.datasets[1].data.shift();
+    ramChart.data.datasets.forEach(d => d.data.shift());
   }
   ramChart.update();
-});
+}, { deep: true });
 </script>

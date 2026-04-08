@@ -52,16 +52,49 @@ function toggle() {
 async function copyLog(log) {
   const text = `[${log.time}] [${log.type.toUpperCase()}] ${log.message}`;
 
-  try {
-    await navigator.clipboard.writeText(text);
-    copied.value = true;
-
-    setTimeout(() => {
-      copied.value = false;
-    }, 1000);
-  } catch (err) {
-    alert('Copy failed');
+  // ✅ Try modern API first
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showCopied();
+      return;
+    } catch (err) {
+      console.warn('Clipboard API failed, falling back');
+    }
   }
+
+  // ✅ Fallback (works on mobile/http)
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+
+    // prevent scroll jump
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    const success = document.execCommand('copy');
+    document.body.removeChild(textarea);
+
+    if (success) {
+      showCopied();
+    } else {
+      throw new Error('execCommand failed');
+    }
+  } catch (err) {
+    console.error('Copy fallback failed:', err);
+    alert('Copy failed — long press to select manually');
+  }
+}
+
+function showCopied() {
+  copied.value = true;
+  setTimeout(() => {
+    copied.value = false;
+  }, 1000);
 }
 
 // auto-scroll when new logs come in (only if not paused)

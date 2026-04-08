@@ -8,14 +8,13 @@
 <script setup>
 import { ref, watch, onMounted, nextTick } from 'vue';
 import Chart from 'chart.js/auto';
-import { store } from '../store.js';
+import { state } from '../state.js';
 
 const netCanvas = ref(null);
 let netChart = null;
 
 onMounted(async () => {
   await nextTick();
-
   const ctx = netCanvas.value.getContext('2d');
 
   netChart = new Chart(ctx, {
@@ -27,28 +26,18 @@ onMounted(async () => {
         { label: 'Egress MB/s', data: [], borderColor: 'yellow', fill: false }
       ]
     },
-    options: {
-      animation: false,
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        y: { min: 0 }
-      }
-    }
+    options: { animation: false, responsive: true, maintainAspectRatio: false, scales: { y: { min: 0 } } }
   });
 });
 
-watch(() => store.stats, (stats) => {
-  if (!stats || !netChart) return;
+watch(() => state.net, (net) => {
+  if (!netChart) return;
+  const ts = new Date().toLocaleTimeString();
 
-  const ts = new Date(stats.ts * 1000).toLocaleTimeString();
-
-  let totalIn = 0;
-  let totalOut = 0;
-
-  for (let k in stats.net) {
-    totalIn += stats.net[k].rate_recv || 0;
-    totalOut += stats.net[k].rate_sent || 0;
+  let totalIn = 0, totalOut = 0;
+  for (let k in net) {
+    totalIn += net[k].rate_recv || 0;
+    totalOut += net[k].rate_sent || 0;
   }
 
   netChart.data.labels.push(ts);
@@ -61,5 +50,5 @@ watch(() => store.stats, (stats) => {
   }
 
   netChart.update();
-});
+}, { deep: true });
 </script>
