@@ -6,7 +6,13 @@ import (
 	"log"
 	"net/http"
 
-	"statsee/src"
+    "./src/cpu"
+    "./src/ram"
+    "./src/disk"
+    "./src/network"
+    "./src/speedtest"
+    "./src/db"
+
 )
 
 //go:embed static/*
