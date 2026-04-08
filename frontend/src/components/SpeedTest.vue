@@ -25,8 +25,20 @@ onMounted(async () => {
   const ctx = speedCanvas.value.getContext('2d');
   speedChart = new Chart(ctx, {
     type: 'doughnut',
-    data: { labels: ['Download','Upload'], datasets: [{ label:'Speed Test', data:[0,0], backgroundColor:['blue','red']] },
-    options: { responsive:true, plugins:{ legend:{position:'bottom'} } }
+    data: {
+      labels: ['Download','Upload'],
+      datasets: [{
+        label: 'Speed Test',
+        data: [0,0],
+        backgroundColor: ['blue','red']
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { position: 'bottom' }
+      }
+    }
   });
 });
 
