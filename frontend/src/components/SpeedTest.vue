@@ -1,42 +1,41 @@
 <template>
-  <div class="card" style="grid-column: span 2;">
+  <div class="card md:col-span-2 flex flex-col items-start">
     <h2>Speed Test</h2>
-    <button @click="startSpeedTest">Run Speed Test</button>
-    <canvas ref="speedCanvas" height="300" class="mt-4 w-full"></canvas>
+    <button @click="runSpeedTest" class="mb-2">Run Speed Test</button>
+    <canvas ref="speedCanvas" style="width:100%;height:300px;" class="mt-4"></canvas>
     <div class="mt-2 text-lg">{{ resultText }}</div>
   </div>
 </template>
 
 <script setup>
-import { ref, watch } from 'vue';
+import { ref, watch, onMounted, nextTick } from 'vue';
 import Chart from 'chart.js/auto';
-import { store, ws } from '../store.js';
+import { store } from '../store.js';
 
 const speedCanvas = ref(null);
 let speedChart = null;
 const resultText = ref('');
 
-onMounted(() => {
-  speedChart = new Chart(speedCanvas.value.getContext('2d'), {
+function runSpeedTest() {
+  if(window.ws) window.ws.send(JSON.stringify({type:'speedtest'}));
+}
+
+onMounted(async () => {
+  await nextTick();
+  const ctx = speedCanvas.value.getContext('2d');
+  speedChart = new Chart(ctx, {
     type: 'doughnut',
-    data: { labels: ['Download','Upload'], datasets: [{ label: 'Speed Test', data: [0,0], backgroundColor: ['blue','red'] }] },
-    options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+    data: { labels: ['Download','Upload'], datasets: [{ label:'Speed Test', data:[0,0], backgroundColor:['blue','red']] },
+    options: { responsive:true, plugins:{ legend:{position:'bottom'} } }
   });
 });
 
-watch(() => store.speedtest, (speed) => {
-  if(speedChart) {
-    speedChart.data.datasets[0].data = [speed.download, speed.upload];
-    speedChart.update();
-    if(speed.download > 0) {
-      resultText.value = `Download: ${speed.download.toFixed(2)} MB/s, Upload: ${speed.upload.toFixed(2)} MB/s`;
-    }
+watch(() => store.speedtest, (msg) => {
+  if(!msg || !speedChart) return;
+  speedChart.data.datasets[0].data = [msg.download || 0, msg.upload || 0];
+  speedChart.update();
+  if(msg.type === 'speedtest_done') {
+    resultText.value = `Download: ${(msg.download||0).toFixed(2)} MB/s, Upload: ${(msg.upload||0).toFixed(2)} MB/s`;
   }
 });
-
-function startSpeedTest() {
-  if(ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'speedtest' }));
-  }
-}
 </script>
