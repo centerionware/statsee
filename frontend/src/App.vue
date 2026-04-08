@@ -17,7 +17,8 @@
 import CpuChart from './components/CpuChart.vue';
 import RamChart from './components/RamChart.vue';
 import DiskChart from './components/DiskChart.vue';
-import NetChart from './components/NetChart.vue';
+import NetChart from './components/NetworkChart.vue';
+import NetTotals from './components/NetworkTotals.vue';
 import SpeedTest from './components/SpeedTest.vue';
 import { initWebSocket } from './store.js';
 
