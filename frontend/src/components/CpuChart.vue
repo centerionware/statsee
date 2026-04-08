@@ -1,45 +1,36 @@
 <template>
   <div class="card">
-    <h2 class="text-xl font-semibold mb-2">CPU Load</h2>
-    <canvas ref="chart" height="300"></canvas>
+    <h2>CPU Load</h2>
+    <canvas ref="cpuCanvas" height="300"></canvas>
   </div>
 </template>
 
-<script>
-import { onMounted, watch } from 'vue';
+<script setup>
+import { ref, watch } from 'vue';
 import Chart from 'chart.js/auto';
-import { state } from '../state.js';
+import { store } from '../store.js';
 
-export default {
-  setup() {
-    let chart;
+const cpuCanvas = ref(null);
+let cpuChart = null;
 
-    onMounted(() => {
-      chart = new Chart(chartRef.value, {
-        type: 'line',
-        data: { labels: [], datasets: [{ label: 'CPU %', data: [], borderColor: 'red', fill: false }] },
-        options: { animation: false, scales: { y: { min: 0, max: 100 } } },
-      });
-    });
+onMounted(() => {
+  cpuChart = new Chart(cpuCanvas.value.getContext('2d'), {
+    type: 'line',
+    data: { labels: [], datasets: [{ label: 'CPU %', data: [], borderColor: 'red', fill: false }] },
+    options: { animation: false, scales: { y: { min: 0, max: 100 } } }
+  });
+});
 
-    const chartRef = ref(null);
-
-    watch(
-      () => state.cpu,
-      (val) => {
-        if (!chart) return;
-        const ts = new Date().toLocaleTimeString();
-        chart.data.labels.push(ts);
-        chart.data.datasets[0].data.push(val);
-        if (chart.data.labels.length > 30) {
-          chart.data.labels.shift();
-          chart.data.datasets[0].data.shift();
-        }
-        chart.update();
-      }
-    );
-
-    return { chartRef };
-  },
-};
+watch(() => store.stats, (stats) => {
+  if(stats && cpuChart) {
+    const ts = new Date(stats.ts * 1000).toLocaleTimeString();
+    cpuChart.data.labels.push(ts);
+    cpuChart.data.datasets[0].data.push(stats.cpu);
+    if(cpuChart.data.labels.length > 30) {
+      cpuChart.data.labels.shift();
+      cpuChart.data.datasets[0].data.shift();
+    }
+    cpuChart.update();
+  }
+});
 </script>

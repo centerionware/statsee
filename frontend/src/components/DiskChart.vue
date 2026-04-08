@@ -1,52 +1,46 @@
 <template>
   <div class="card">
-    <h2 class="text-xl font-semibold mb-2">Disk I/O (MB)</h2>
-    <canvas ref="chart" height="300"></canvas>
+    <h2>Disk I/O (MB)</h2>
+    <canvas ref="diskCanvas" height="300"></canvas>
   </div>
 </template>
 
-<script>
-import { onMounted, watch } from 'vue';
+<script setup>
+import { ref, watch } from 'vue';
 import Chart from 'chart.js/auto';
-import { state } from '../state.js';
+import { store } from '../store.js';
 
-export default {
-  setup() {
-    let chart;
-    const chartRef = ref(null);
+const diskCanvas = ref(null);
+let diskChart = null;
 
-    onMounted(() => {
-      chart = new Chart(chartRef.value, {
-        type: 'line',
-        data: {
-          labels: [],
-          datasets: [
-            { label: 'Read MB', data: [], borderColor: 'cyan', fill: false },
-            { label: 'Write MB', data: [], borderColor: 'magenta', fill: false },
-          ],
-        },
-        options: { animation: false, scales: { y: { min: 0 } } },
-      });
-    });
+onMounted(() => {
+  diskChart = new Chart(diskCanvas.value.getContext('2d'), {
+    type: 'line',
+    data: { labels: [], datasets: [
+      { label: 'Read MB', data: [], borderColor: 'cyan', fill: false },
+      { label: 'Write MB', data: [], borderColor: 'magenta', fill: false }
+    ] },
+    options: { animation: false, scales: { y: { min: 0 } } }
+  });
+});
 
-    watch(
-      () => [state.disk.read, state.disk.write],
-      () => {
-        if (!chart) return;
-        const ts = new Date().toLocaleTimeString();
-        chart.data.labels.push(ts);
-        chart.data.datasets[0].data.push(state.disk.read);
-        chart.data.datasets[1].data.push(state.disk.write);
-        if (chart.data.labels.length > 30) {
-          chart.data.labels.shift();
-          chart.data.datasets[0].data.shift();
-          chart.data.datasets[1].data.shift();
-        }
-        chart.update();
-      }
-    );
-
-    return { chartRef };
-  },
-};
+watch(() => store.stats, (stats) => {
+  if(stats && diskChart) {
+    const ts = new Date(stats.ts * 1000).toLocaleTimeString();
+    let totalRead = 0, totalWrite = 0;
+    for(const k in stats.disk) {
+      totalRead += stats.disk[k].ReadBytes / 1024 / 1024;
+      totalWrite += stats.disk[k].WriteBytes / 1024 / 1024;
+    }
+    diskChart.data.labels.push(ts);
+    diskChart.data.datasets[0].data.push(totalRead);
+    diskChart.data.datasets[1].data.push(totalWrite);
+    if(diskChart.data.labels.length > 30) {
+      diskChart.data.labels.shift();
+      diskChart.data.datasets[0].data.shift();
+      diskChart.data.datasets[1].data.shift();
+    }
+    diskChart.update();
+  }
+});
 </script>

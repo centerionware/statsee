@@ -1,57 +1,64 @@
 <template>
   <div class="card">
-    <h2 class="text-xl font-semibold mb-2">Network Traffic</h2>
-    <div class="mb-2 text-lg font-bold text-gray-300">
-      <div v-for="(iface, name) in state.net" :key="name">
-        <b>{{ name }}</b>: Rx {{ iface.rate_recv.toFixed(2) }} MB/s / Tx {{ iface.rate_sent.toFixed(2) }} MB/s
-      </div>
-    </div>
-    <canvas ref="chart" height="300"></canvas>
+    <h2>Network Traffic</h2>
+    <div v-html="networkHtml" class="mb-2"></div>
+    <canvas ref="netCanvas" height="300"></canvas>
   </div>
 </template>
 
-<script>
-import { onMounted, watch } from 'vue';
+<script setup>
+import { ref, watch } from 'vue';
 import Chart from 'chart.js/auto';
-import { state } from '../state.js';
+import { store } from '../store.js';
 
-export default {
-  setup() {
-    let chart;
-    const chartRef = ref(null);
+const netCanvas = ref(null);
+let netChart = null;
+const networkHtml = ref('Loading network totals...');
 
-    onMounted(() => {
-      chart = new Chart(chartRef.value, {
-        type: 'line',
-        data: { labels: [], datasets: [
-          { label: 'Ingress MB/s', data: [], borderColor: 'lime', fill: false },
-          { label: 'Egress MB/s', data: [], borderColor: 'yellow', fill: false },
-        ]},
-        options: { animation: false, scales: { y: { min: 0 } } },
-      });
-    });
+async function fetchTotals() {
+  try {
+    const res = await fetch('/api/network-totals');
+    const totals = await res.json();
+    store.networkTotals = totals;
+    let txt = '';
+    for(let iface in totals){
+      txt += `<b>${iface}</b>: Today: ${totals[iface].daily_in.toFixed(2)}GB in / ${totals[iface].daily_out.toFixed(2)}GB out, Month: ${totals[iface].monthly_in.toFixed(2)}GB in / ${totals[iface].monthly_out.toFixed(2)}GB out<br>`;
+    }
+    networkHtml.value = txt;
+  } catch(e){ console.error(e); }
+}
 
-    watch(
-      () => state.net,
-      () => {
-        if (!chart) return;
-        const ts = new Date().toLocaleTimeString();
-        const totalIn = Object.values(state.net).reduce((sum, n) => sum + n.rate_recv, 0);
-        const totalOut = Object.values(state.net).reduce((sum, n) => sum + n.rate_sent, 0);
-        chart.data.labels.push(ts);
-        chart.data.datasets[0].data.push(totalIn);
-        chart.data.datasets[1].data.push(totalOut);
-        if(chart.data.labels.length > 30){
-          chart.data.labels.shift();
-          chart.data.datasets[0].data.shift();
-          chart.data.datasets[1].data.shift();
-        }
-        chart.update();
-      },
-      { deep: true }
-    );
+setInterval(fetchTotals, 3000);
+fetchTotals();
 
-    return { chartRef, state };
-  },
-};
+onMounted(() => {
+  netChart = new Chart(netCanvas.value.getContext('2d'), {
+    type: 'line',
+    data: { labels: [], datasets: [
+      { label: 'Ingress MB/s', data: [], borderColor: 'lime', fill: false },
+      { label: 'Egress MB/s', data: [], borderColor: 'yellow', fill: false }
+    ]},
+    options: { animation: false, scales: { y: { min: 0 } } }
+  });
+});
+
+watch(() => store.stats, (stats) => {
+  if(stats && netChart) {
+    const ts = new Date(stats.ts * 1000).toLocaleTimeString();
+    let totalIn = 0, totalOut = 0;
+    for(const k in stats.net) {
+      totalIn += stats.net[k].rate_recv;
+      totalOut += stats.net[k].rate_sent;
+    }
+    netChart.data.labels.push(ts);
+    netChart.data.datasets[0].data.push(totalIn);
+    netChart.data.datasets[1].data.push(totalOut);
+    if(netChart.data.labels.length > 30) {
+      netChart.data.labels.shift();
+      netChart.data.datasets[0].data.shift();
+      netChart.data.datasets[1].data.shift();
+    }
+    netChart.update();
+  }
+});
 </script>
