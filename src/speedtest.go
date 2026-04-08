@@ -42,13 +42,6 @@ func (s *SpeedTestManager) run() {
 		"type": "speedtest_start",
 	})
 
-    //    user, err := speedtest.FetchUserInfo()
-    //    if err != nil {
-    //    	log.Println("[speedtest] user error:", err)
-    //    	s.fail(err)
-    //    	return
-    //    }
-
 	servers, err := speedtest.FetchServers()
 	if err != nil {
 		log.Println("[speedtest] server error:", err)
@@ -64,7 +57,6 @@ func (s *SpeedTestManager) run() {
 	}
 
 	server := targets[0]
-
 	log.Println("[speedtest] using server:", server.Name)
 
 	server.PingTest(nil)
@@ -90,6 +82,10 @@ func (s *SpeedTestManager) run() {
 	})
 }
 
+func bitsToMBps(bits float64) float64 {
+	return bits / 8 / (1024 * 1024) // bytes/sec → MB/s
+}
+
 func (s *SpeedTestManager) runDownload(server *speedtest.Server) (float64, error) {
 	done := make(chan struct{})
 
@@ -106,16 +102,15 @@ func (s *SpeedTestManager) runDownload(server *speedtest.Server) (float64, error
 	for {
 		select {
 		case <-done:
-			log.Println("[speedtest] download final:", server.DLSpeed)
-			return float64(server.DLSpeed), nil
+			final := bitsToMBps(float64(server.DLSpeed))
+			log.Println("[speedtest] download final:", final)
+			return final, nil
 
 		case <-ticker.C:
-			current := float64(server.DLSpeed)
+			current := bitsToMBps(float64(server.DLSpeed))
 			if current != last {
 				last = current
-
 				log.Println("[speedtest] download:", current)
-
 				broadcast(map[string]interface{}{
 					"type":     "speedtest_progress",
 					"stage":    "download",
@@ -142,16 +137,15 @@ func (s *SpeedTestManager) runUpload(server *speedtest.Server) (float64, error) 
 	for {
 		select {
 		case <-done:
-			log.Println("[speedtest] upload final:", server.ULSpeed)
-			return float64(server.ULSpeed), nil
+			final := bitsToMBps(float64(server.ULSpeed))
+			log.Println("[speedtest] upload final:", final)
+			return final, nil
 
 		case <-ticker.C:
-			current := float64(server.ULSpeed)
+			current := bitsToMBps(float64(server.ULSpeed))
 			if current != last {
 				last = current
-
 				log.Println("[speedtest] upload:", current)
-
 				broadcast(map[string]interface{}{
 					"type":   "speedtest_progress",
 					"stage":  "upload",
@@ -164,7 +158,6 @@ func (s *SpeedTestManager) runUpload(server *speedtest.Server) (float64, error) 
 
 func (s *SpeedTestManager) fail(err error) {
 	log.Println("[speedtest] failed:", err)
-
 	broadcast(map[string]interface{}{
 		"type":  "speedtest_error",
 		"error": err.Error(),
