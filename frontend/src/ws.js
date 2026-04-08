@@ -1,71 +1,38 @@
-import { reactive } from 'vue'
+import { state } from './state.js';
 
-export const state = reactive({
-  labels: [],
-  cpu: [],
-  ramUsed: [],
-  ramFree: [],
-  diskRead: [],
-  diskWrite: [],
-  netIn: [],
-  netOut: [],
-  speedtest: {
-    download: 0,
-    upload: 0,
-    running: false
-  }
-})
+let ws;
 
-const ws = new WebSocket(`ws://${location.host}/ws`)
+export function initWS() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
 
-ws.onmessage = (e) => {
-  const msg = JSON.parse(e.data)
-  const ts = new Date().toLocaleTimeString()
+  ws.onopen = () => {
+    console.log('WebSocket connected');
+  };
 
-  if (msg.type === 'stats') {
-    state.labels.push(ts)
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
 
-    state.cpu.push(msg.cpu)
-    state.ramUsed.push(msg.ram.used)
-    state.ramFree.push(msg.ram.free)
-
-    let read = 0, write = 0
-    for (let k in msg.disk) {
-      read += msg.disk[k].ReadBytes / 1024 / 1024
-      write += msg.disk[k].WriteBytes / 1024 / 1024
+    if (msg.type === 'stats') {
+      state.cpu = msg.cpu;
+      state.ram.used = msg.ram.used;
+      state.ram.free = msg.ram.free;
+      state.disk.read = Object.values(msg.disk).reduce((sum, d) => sum + d.ReadBytes / 1024 / 1024, 0);
+      state.disk.write = Object.values(msg.disk).reduce((sum, d) => sum + d.WriteBytes / 1024 / 1024, 0);
+      state.net = { ...msg.net }; // replace object for reactivity
+    } else if (msg.type === 'speedtest_update' || msg.type === 'speedtest_done') {
+      state.speedTest.download = msg.download;
+      state.speedTest.upload = msg.upload;
     }
+  };
 
-    let netIn = 0, netOut = 0
-    for (let k in msg.net) {
-      netIn += msg.net[k].rate_recv
-      netOut += msg.net[k].rate_sent
-    }
-
-    state.diskRead.push(read)
-    state.diskWrite.push(write)
-    state.netIn.push(netIn)
-    state.netOut.push(netOut)
-
-    if (state.labels.length > 30) {
-      for (let key in state) {
-        if (Array.isArray(state[key])) state[key].shift()
-      }
-    }
-  }
-
-  if (msg.type === 'speedtest_update') {
-    state.speedtest.download = msg.download
-    state.speedtest.upload = msg.upload
-    state.speedtest.running = true
-  }
-
-  if (msg.type === 'speedtest_done') {
-    state.speedtest.download = msg.download
-    state.speedtest.upload = msg.upload
-    state.speedtest.running = false
-  }
+  ws.onclose = () => {
+    console.log('WebSocket closed. Attempting reconnect in 2s...');
+    setTimeout(initWS, 2000);
+  };
 }
 
 export function startSpeedTest() {
-  ws.send(JSON.stringify({ type: 'speedtest' }))
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'speedtest' }));
+  }
 }
