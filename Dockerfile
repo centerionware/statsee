@@ -16,7 +16,7 @@ WORKDIR /app
 COPY . .
 
 # Init module if not present (safe)
-RUN go mod init 
+RUN go mod init github.com/centerionware/statsee
 
 # Copy go files first (cache deps)
 # COPY go.mod go.sum* ./
