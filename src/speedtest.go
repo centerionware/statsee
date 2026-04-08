@@ -40,16 +40,19 @@ func (s *SpeedTestManager) run() {
 	})
 
 	// --------------------
-	// Fetch config
+	// Fetch user info
 	// --------------------
-	user, err := speedtest.FetchUserInfo()
+	_, err := speedtest.FetchUserInfo()
 	if err != nil {
 		log.Println("speedtest user error:", err)
 		s.fail(err)
 		return
 	}
 
-	servers, err := speedtest.FetchServers(user)
+	// --------------------
+	// Fetch servers
+	// --------------------
+	servers, err := speedtest.FetchServers()
 	if err != nil {
 		log.Println("speedtest server error:", err)
 		s.fail(err)
@@ -66,9 +69,9 @@ func (s *SpeedTestManager) run() {
 	server := targets[0]
 
 	// --------------------
-	// Ping
+	// Ping test
 	// --------------------
-	server.PingTest()
+	server.PingTest(func(latency time.Duration) {})
 
 	broadcast(map[string]interface{}{
 		"type":   "speedtest_progress",
@@ -78,7 +81,7 @@ func (s *SpeedTestManager) run() {
 	})
 
 	// --------------------
-	// Download
+	// Download test
 	// --------------------
 	download, err := s.runDownload(server)
 	if err != nil {
@@ -88,7 +91,7 @@ func (s *SpeedTestManager) run() {
 	}
 
 	// --------------------
-	// Upload
+	// Upload test
 	// --------------------
 	upload, err := s.runUpload(server)
 	if err != nil {
@@ -113,7 +116,7 @@ func (s *SpeedTestManager) runDownload(server *speedtest.Server) (float64, error
 	done := make(chan struct{})
 
 	go func() {
-		_ = server.DownloadTest(false)
+		_ = server.DownloadTest()
 		close(done)
 	}()
 
@@ -125,15 +128,11 @@ func (s *SpeedTestManager) runDownload(server *speedtest.Server) (float64, error
 	for {
 		select {
 		case <-done:
-			return server.DLSpeed, nil
-
+			return float64(server.DLSpeed), nil
 		case <-ticker.C:
-			current := server.DLSpeed
-
-			// Only send if changed (reduces spam)
+			current := float64(server.DLSpeed)
 			if current != last {
 				last = current
-
 				broadcast(map[string]interface{}{
 					"type":     "speedtest_progress",
 					"stage":    "download",
@@ -148,7 +147,7 @@ func (s *SpeedTestManager) runUpload(server *speedtest.Server) (float64, error) 
 	done := make(chan struct{})
 
 	go func() {
-		_ = server.UploadTest(false)
+		_ = server.UploadTest()
 		close(done)
 	}()
 
@@ -160,14 +159,11 @@ func (s *SpeedTestManager) runUpload(server *speedtest.Server) (float64, error) 
 	for {
 		select {
 		case <-done:
-			return server.ULSpeed, nil
-
+			return float64(server.ULSpeed), nil
 		case <-ticker.C:
-			current := server.ULSpeed
-
+			current := float64(server.ULSpeed)
 			if current != last {
 				last = current
-
 				broadcast(map[string]interface{}{
 					"type":   "speedtest_progress",
 					"stage":  "upload",
