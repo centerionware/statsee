@@ -19,7 +19,7 @@ func (s *SpeedTestManager) Start() {
 	s.mu.Lock()
 	if s.running {
 		s.mu.Unlock()
-		log.Println("speedtest already running")
+		log.Println("[speedtest] already running")
 		return
 	}
 	s.running = true
@@ -29,80 +29,58 @@ func (s *SpeedTestManager) Start() {
 }
 
 func (s *SpeedTestManager) run() {
+	log.Println("[speedtest] started")
+
 	defer func() {
 		s.mu.Lock()
 		s.running = false
 		s.mu.Unlock()
+		log.Println("[speedtest] finished")
 	}()
 
 	broadcast(map[string]interface{}{
 		"type": "speedtest_start",
 	})
 
-	// --------------------
-	// Fetch user info
-	// --------------------
-	_, err := speedtest.FetchUserInfo()
+	user, err := speedtest.FetchUserInfo()
 	if err != nil {
-		log.Println("speedtest user error:", err)
+		log.Println("[speedtest] user error:", err)
 		s.fail(err)
 		return
 	}
 
-	// --------------------
-	// Fetch servers
-	// --------------------
-	servers, err := speedtest.FetchServers()
+	servers, err := speedtest.FetchServers(user)
 	if err != nil {
-		log.Println("speedtest server error:", err)
+		log.Println("[speedtest] server error:", err)
 		s.fail(err)
 		return
 	}
 
 	targets, err := servers.FindServer([]int{})
 	if err != nil || len(targets) == 0 {
-		log.Println("no speedtest servers found")
+		log.Println("[speedtest] no servers found")
 		s.fail(err)
 		return
 	}
 
 	server := targets[0]
 
-	// --------------------
-	// Ping test
-	// --------------------
-	server.PingTest(func(latency time.Duration) {})
+	log.Println("[speedtest] using server:", server.Name)
 
-	broadcast(map[string]interface{}{
-		"type":   "speedtest_progress",
-		"stage":  "ping",
-		"ping":   server.Latency.Seconds() * 1000,
-		"server": server.Name,
-	})
+	server.PingTest(nil)
 
-	// --------------------
-	// Download test
-	// --------------------
 	download, err := s.runDownload(server)
 	if err != nil {
-		log.Println("download error:", err)
 		s.fail(err)
 		return
 	}
 
-	// --------------------
-	// Upload test
-	// --------------------
 	upload, err := s.runUpload(server)
 	if err != nil {
-		log.Println("upload error:", err)
 		s.fail(err)
 		return
 	}
 
-	// --------------------
-	// Done
-	// --------------------
 	broadcast(map[string]interface{}{
 		"type":     "speedtest_done",
 		"download": download,
@@ -128,11 +106,16 @@ func (s *SpeedTestManager) runDownload(server *speedtest.Server) (float64, error
 	for {
 		select {
 		case <-done:
+			log.Println("[speedtest] download final:", server.DLSpeed)
 			return float64(server.DLSpeed), nil
+
 		case <-ticker.C:
 			current := float64(server.DLSpeed)
 			if current != last {
 				last = current
+
+				log.Println("[speedtest] download:", current)
+
 				broadcast(map[string]interface{}{
 					"type":     "speedtest_progress",
 					"stage":    "download",
@@ -159,11 +142,16 @@ func (s *SpeedTestManager) runUpload(server *speedtest.Server) (float64, error) 
 	for {
 		select {
 		case <-done:
+			log.Println("[speedtest] upload final:", server.ULSpeed)
 			return float64(server.ULSpeed), nil
+
 		case <-ticker.C:
 			current := float64(server.ULSpeed)
 			if current != last {
 				last = current
+
+				log.Println("[speedtest] upload:", current)
+
 				broadcast(map[string]interface{}{
 					"type":   "speedtest_progress",
 					"stage":  "upload",
@@ -175,6 +163,8 @@ func (s *SpeedTestManager) runUpload(server *speedtest.Server) (float64, error) 
 }
 
 func (s *SpeedTestManager) fail(err error) {
+	log.Println("[speedtest] failed:", err)
+
 	broadcast(map[string]interface{}{
 		"type":  "speedtest_error",
 		"error": err.Error(),

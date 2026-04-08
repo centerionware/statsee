@@ -3,14 +3,14 @@
     <h1>StatSee Dashboard</h1>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
-      <CpuChart style="height: 350px;"/>
-      <RamChart style="height: 350px;"/>
-      <DiskChart style="height: 350px;"/>
-      <NetChart style="height: 350px;"/>
-      <NetTotals style="height: 350px;"/>
+      <CpuChart style="height: 400px;"/>
+      <RamChart style="height: 400px;"/>
+      <DiskChart style="height: 400px;"/>
+      <NetChart style="height: 400px;"/>
+      <NetTotals style="height: 400px;"/>
     </div>
 
-    <SpeedTest style="height: 350px;"/>
+    <SpeedTest style="height: 400px;"/>
   </div>
 </template>
 

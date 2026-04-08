@@ -1,6 +1,7 @@
 package src
 
 import (
+	"log"
 	"net/http"
 	"sync"
 
@@ -18,14 +19,18 @@ var (
 func WSHandler(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		log.Println("[WS] upgrade error:", err)
 		return
 	}
+
+	log.Println("[WS] client connected")
 
 	wsLock.Lock()
 	wsClients[conn] = true
 	wsLock.Unlock()
 
 	defer func() {
+		log.Println("[WS] client disconnected")
 		wsLock.Lock()
 		delete(wsClients, conn)
 		wsLock.Unlock()
@@ -35,12 +40,16 @@ func WSHandler(w http.ResponseWriter, r *http.Request) {
 	for {
 		var msg map[string]string
 		if err := conn.ReadJSON(&msg); err != nil {
+			log.Println("[WS] read error:", err)
 			return
 		}
 
+		log.Println("[WS] received:", msg)
+
 		if msg["type"] == "speedtest" {
-        	speedTest.Start()
-        }
+			log.Println("[WS] starting speedtest")
+			speedTest.Start()
+		}
 	}
 }
 
@@ -49,6 +58,10 @@ func broadcast(msg interface{}) {
 	defer wsLock.Unlock()
 
 	for c := range wsClients {
-		c.WriteJSON(msg)
+		if err := c.WriteJSON(msg); err != nil {
+			log.Println("[WS] write error:", err)
+			c.Close()
+			delete(wsClients, c)
+		}
 	}
 }

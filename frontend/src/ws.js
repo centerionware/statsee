@@ -6,11 +6,12 @@ export function initWS() {
   ws = new WebSocket(`ws://${location.host}/ws`);
 
   ws.onopen = () => {
-    console.log('WebSocket connected');
+    console.log('[WS] connected');
   };
 
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
+    console.log('[WS] message:', msg);
 
     if (msg.type === 'stats') {
       state.cpu = msg.cpu;
@@ -18,21 +19,32 @@ export function initWS() {
       state.ram.free = msg.ram.free;
       state.disk.read = Object.values(msg.disk).reduce((sum, d) => sum + d.ReadBytes / 1024 / 1024, 0);
       state.disk.write = Object.values(msg.disk).reduce((sum, d) => sum + d.WriteBytes / 1024 / 1024, 0);
-      state.net = { ...msg.net }; // replace object for reactivity
-    } else if (msg.type === 'speedtest_update' || msg.type === 'speedtest_done') {
-      state.speedTest.download = msg.download;
-      state.speedTest.upload = msg.upload;
+      state.net = { ...msg.net };
+    }
+
+    if (
+      msg.type === 'speedtest_progress' ||
+      msg.type === 'speedtest_done' ||
+      msg.type === 'speedtest_start'
+    ) {
+      state.speedTest = {
+        ...state.speedTest,
+        ...msg,
+      };
     }
   };
 
   ws.onclose = () => {
-    console.log('WebSocket closed. Attempting reconnect in 2s...');
+    console.log('[WS] closed. reconnecting...');
     setTimeout(initWS, 2000);
   };
 }
 
 export function startSpeedTest() {
   if (ws && ws.readyState === WebSocket.OPEN) {
+    console.log('[WS] sending speedtest start');
     ws.send(JSON.stringify({ type: 'speedtest' }));
+  } else {
+    console.warn('[WS] not connected');
   }
 }
