@@ -31,7 +31,6 @@ func main() {
 	http.Handle("/", spaHandler(subFS, fileServer))
 
 	// API & WebSocket routes
-	http.HandleFunc("/api/network-totals", src.HandleNetworkTotals) // keep existing
 	http.HandleFunc("/api/network-live", src.HandleNetworkLive)     // NEW
 	http.HandleFunc("/api/network-history", src.HandleNetworkHistory) // NEW
 	http.HandleFunc("/ws", src.WSHandler)
