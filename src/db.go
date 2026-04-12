@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -12,11 +14,8 @@ import (
 
 var db *bolt.DB
 
-const (
-	dbPath = "/db/statsee.db"
-)
+const dbPath = "/db/statsee.db"
 
-// Stored structures
 type NetSnapshot struct {
 	Rx uint64 `json:"rx"`
 	Tx uint64 `json:"tx"`
@@ -30,7 +29,6 @@ var lastPersist time.Time
 // --------------------
 
 func InitDB() {
-	// Ensure directory exists (important for Kubernetes PVC mount)
 	if err := os.MkdirAll("/db", 0755); err != nil {
 		log.Fatal(err)
 	}
@@ -55,7 +53,6 @@ func CloseDB() {
 func UpdateNetworkTotals(rx, tx uint64) {
 	now := time.Now()
 
-	// Only persist every 5 seconds
 	if time.Since(lastPersist) < 5*time.Second {
 		return
 	}
@@ -75,20 +72,39 @@ func UpdateNetworkTotals(rx, tx uint64) {
 
 		data, _ := json.Marshal(current)
 
-		// Store current state (for crash recovery)
+		// current snapshot
 		if err := b.Put([]byte("meta:current"), data); err != nil {
 			return err
 		}
 
-		// Check if we need to create a daily snapshot
+		// DAILY SNAPSHOT
 		dayKey := "daily:" + now.Format("2006-01-02")
-
 		if b.Get([]byte(dayKey)) == nil {
-			// First write of the day → snapshot
-			if err := b.Put([]byte(dayKey), data); err != nil {
-				return err
-			}
+			b.Put([]byte(dayKey), data)
 			log.Println("Created daily snapshot:", dayKey)
+		}
+
+		// MONTHLY SNAPSHOT
+		monthKey := "monthly:" + now.Format("2006-01")
+		if b.Get([]byte(monthKey)) == nil {
+			b.Put([]byte(monthKey), data)
+			log.Println("Created monthly snapshot:", monthKey)
+		}
+
+		// CLEANUP OLD DAILY (>30 days)
+		cutoff := now.AddDate(0, 0, -30)
+
+		c := b.Cursor()
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			key := string(k)
+
+			if strings.HasPrefix(key, "daily:") {
+				dateStr := strings.TrimPrefix(key, "daily:")
+				t, err := time.Parse("2006-01-02", dateStr)
+				if err == nil && t.Before(cutoff) {
+					b.Delete(k)
+				}
+			}
 		}
 
 		return nil
@@ -101,56 +117,137 @@ func UpdateNetworkTotals(rx, tx uint64) {
 
 //
 // --------------------
-// READ / API
+// LIVE API (FAST)
 // --------------------
 
-func HandleNetworkTotals(w http.ResponseWriter, r *http.Request) {
+func HandleNetworkLive(w http.ResponseWriter, r *http.Request) {
 	result := make(map[string]NetTotals)
 
-	err := db.View(func(txn *bolt.Tx) error {
+	db.View(func(txn *bolt.Tx) error {
 		b := txn.Bucket([]byte("net"))
 		if b == nil {
 			return nil
 		}
 
 		now := time.Now()
+
 		todayKey := "daily:" + now.Format("2006-01-02")
-		yesterdayKey := "daily:" + now.Add(-24*time.Hour).Format("2006-01-02")
+		monthKey := "monthly:" + now.Format("2006-01")
 
-		var todaySnap, yesterdaySnap, currentSnap NetSnapshot
+		var todaySnap, monthSnap, current NetSnapshot
 
-		// Load snapshots
 		if v := b.Get([]byte(todayKey)); v != nil {
 			json.Unmarshal(v, &todaySnap)
 		}
-		if v := b.Get([]byte(yesterdayKey)); v != nil {
-			json.Unmarshal(v, &yesterdaySnap)
+		if v := b.Get([]byte(monthKey)); v != nil {
+			json.Unmarshal(v, &monthSnap)
 		}
 		if v := b.Get([]byte("meta:current")); v != nil {
-			json.Unmarshal(v, &currentSnap)
+			json.Unmarshal(v, &current)
 		}
 
-		// Calculate daily usage
-		dailyIn := float64(currentSnap.Rx-todaySnap.Rx) / 1024 / 1024 / 1024
-		dailyOut := float64(currentSnap.Tx-todaySnap.Tx) / 1024 / 1024 / 1024
-
-		// Calculate yesterday usage (for sanity / future UI)
-		_ = yesterdaySnap // (you’ll likely use this soon)
-
 		result[Iface] = NetTotals{
-			DailyIn:    dailyIn,
-			DailyOut:   dailyOut,
-			MonthlyIn:  dailyIn,  // placeholder for now
-			MonthlyOut: dailyOut, // placeholder
+			DailyIn:    bytesToGB(current.Rx - todaySnap.Rx),
+			DailyOut:   bytesToGB(current.Tx - todaySnap.Tx),
+			MonthlyIn:  bytesToGB(current.Rx - monthSnap.Rx),
+			MonthlyOut: bytesToGB(current.Tx - monthSnap.Tx),
 		}
 
 		return nil
 	})
 
-	if err != nil {
-		log.Println("DB read error:", err)
+	json.NewEncoder(w).Encode(result)
+}
+
+//
+// --------------------
+// HISTORY API (SLOW)
+// --------------------
+
+func HandleNetworkHistory(w http.ResponseWriter, r *http.Request) {
+	var daily []DailyStat
+	var monthly []MonthlyStat
+
+	db.View(func(txn *bolt.Tx) error {
+		b := txn.Bucket([]byte("net"))
+		if b == nil {
+			return nil
+		}
+
+		type kv struct {
+			key string
+			val NetSnapshot
+		}
+
+		var dailySnaps []kv
+		var monthlySnaps []kv
+
+		c := b.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			key := string(k)
+
+			var snap NetSnapshot
+			json.Unmarshal(v, &snap)
+
+			if strings.HasPrefix(key, "daily:") {
+				dailySnaps = append(dailySnaps, kv{key, snap})
+			}
+			if strings.HasPrefix(key, "monthly:") {
+				monthlySnaps = append(monthlySnaps, kv{key, snap})
+			}
+		}
+
+		sort.Slice(dailySnaps, func(i, j int) bool {
+			return dailySnaps[i].key < dailySnaps[j].key
+		})
+
+		sort.Slice(monthlySnaps, func(i, j int) bool {
+			return monthlySnaps[i].key < monthlySnaps[j].key
+		})
+
+		// build daily deltas
+		for i := 1; i < len(dailySnaps); i++ {
+			prev := dailySnaps[i-1]
+			curr := dailySnaps[i]
+
+			date := strings.TrimPrefix(curr.key, "daily:")
+
+			daily = append(daily, DailyStat{
+				Date: date,
+				In:   bytesToGB(curr.val.Rx - prev.val.Rx),
+				Out:  bytesToGB(curr.val.Tx - prev.val.Tx),
+			})
+		}
+
+		// build monthly deltas
+		for i := 1; i < len(monthlySnaps); i++ {
+			prev := monthlySnaps[i-1]
+			curr := monthlySnaps[i]
+
+			month := strings.TrimPrefix(curr.key, "monthly:")
+
+			monthly = append(monthly, MonthlyStat{
+				Month: month,
+				In:    bytesToGB(curr.val.Rx - prev.val.Rx),
+				Out:   bytesToGB(curr.val.Tx - prev.val.Tx),
+			})
+		}
+
+		return nil
+	})
+
+	resp := map[string]interface{}{
+		"daily":   daily,
+		"monthly": monthly,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	json.NewEncoder(w).Encode(resp)
+}
+
+// --------------------
+// HELPERS
+// --------------------
+
+func bytesToGB(v uint64) float64 {
+	return float64(v) / 1024 / 1024 / 1024
 }

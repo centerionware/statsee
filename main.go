@@ -31,7 +31,9 @@ func main() {
 	http.Handle("/", spaHandler(subFS, fileServer))
 
 	// API & WebSocket routes
-	http.HandleFunc("/api/network-totals", src.HandleNetworkTotals)
+	http.HandleFunc("/api/network-totals", src.HandleNetworkTotals) // keep existing
+	http.HandleFunc("/api/network-live", src.HandleNetworkLive)     // NEW
+	http.HandleFunc("/api/network-history", src.HandleNetworkHistory) // NEW
 	http.HandleFunc("/ws", src.WSHandler)
 
 	// Start background collector
@@ -44,10 +46,8 @@ func main() {
 // spaHandler serves static files from fsys, falls back to index.html for SPA routing
 func spaHandler(fsys fs.FS, fsHandler http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Normalize URL path: remove leading slash
 		path := strings.TrimPrefix(r.URL.Path, "/")
 
-		// Try to open requested file
 		f, err := fsys.Open(path)
 		if err == nil {
 			f.Close()
@@ -55,7 +55,6 @@ func spaHandler(fsys fs.FS, fsHandler http.Handler) http.HandlerFunc {
 			return
 		}
 
-		// Fallback to index.html
 		data, err := fs.ReadFile(fsys, "index.html")
 		if err != nil {
 			http.Error(w, "index.html not found", 500)
