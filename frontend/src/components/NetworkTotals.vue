@@ -27,11 +27,12 @@
       </div>
     </div>
 
+    <!-- CURRENT MONTH VIEW -->
     <div v-if="isCurrentMonth">
       <div class="label">Daily Usage</div>
 
       <div v-if="filteredDays.length === 0" class="empty">
-        No data yet (wait until tomorrow)
+        No data yet (wait for data collection)
       </div>
 
       <div class="days">
@@ -41,7 +42,7 @@
           class="day"
           @click="selectedDay = d"
         >
-          <div class="date">{{ d.slice?.(5) || d.date.slice(5) }}</div>
+          <div class="date">{{ d.date.slice(5) }}</div>
 
           <div class="bar">
             <div class="bar-dl" :style="{ width: percent(d.in) + '%' }"></div>
@@ -51,16 +52,23 @@
       </div>
     </div>
 
+    <!-- PAST MONTH VIEW -->
     <div v-else>
       <div class="label">{{ selectedMonth }}</div>
 
       <div class="month-bar">
-        <div class="bar-dl" :style="{ width: percent(selectedMonthData.in) + '%' }"></div>
-        <div class="bar-ul" :style="{ width: percent(selectedMonthData.out) + '%' }"></div>
+        <div
+          class="bar-dl"
+          :style="{ width: percent(selectedMonthData.in) + '%' }"
+        ></div>
+        <div
+          class="bar-ul"
+          :style="{ width: percent(selectedMonthData.out) + '%' }"
+        ></div>
       </div>
     </div>
 
-    <!-- sheet -->
+    <!-- DAY DETAIL SHEET -->
     <div v-if="selectedDay" class="sheet" @click.self="selectedDay = null">
       <div class="sheet-inner">
         <b>{{ selectedDay.date }}</b><br />
@@ -80,6 +88,10 @@ const history = ref({ daily: [], monthly: [] })
 const selectedMonth = ref('')
 const selectedDay = ref(null)
 
+// --------------------
+// DATA LOADING
+// --------------------
+
 async function loadLive() {
   const r = await fetch('/api/network-live')
   const j = await r.json()
@@ -95,6 +107,10 @@ async function loadHistory() {
   }
 }
 
+// --------------------
+// COMPUTED STATE
+// --------------------
+
 const isCurrentMonth = computed(() =>
   selectedMonth.value === new Date().toISOString().slice(0, 7)
 )
@@ -104,7 +120,10 @@ const filteredDays = computed(() =>
 )
 
 const selectedMonthData = computed(() =>
-  history.value.monthly.find(m => m.month === selectedMonth.value) || { in: 0, out: 0 }
+  history.value.monthly.find(m => m.month === selectedMonth.value) || {
+    in: 0,
+    out: 0
+  }
 )
 
 const maxDaily = computed(() =>
@@ -115,15 +134,30 @@ function percent(v) {
   return (v / maxDaily.value) * 100
 }
 
+// FIXED: correct month baseline (no misleading ratio anymore)
 const todayPercent = computed(() => {
-  const t = live.value.daily_in + live.value.daily_out
-  const m = live.value.monthly_in + live.value.monthly_out
-  return m === 0 ? 0 : (t / m) * 100
+  const t = (live.value.daily_in || 0) + (live.value.daily_out || 0)
+
+  const currentMonth = history.value.monthly.find(
+    m => m.month === new Date().toISOString().slice(0, 7)
+  ) || { in: 0, out: 0 }
+
+  const total = currentMonth.in + currentMonth.out
+
+  return total === 0 ? 0 : (t / total) * 100
 })
+
+// --------------------
+// ACTIONS
+// --------------------
 
 function selectMonth(m) {
   selectedMonth.value = m
 }
+
+// --------------------
+// INIT
+// --------------------
 
 onMounted(() => {
   loadLive()
@@ -140,28 +174,100 @@ onMounted(() => {
 .dl { color:#3b82f6; }
 .ul { color:#ef4444; }
 
-.progress { height:10px; background:#333; border-radius:10px; overflow:hidden; }
-.progress-inner { height:100%; background:#3b82f6; }
+.progress {
+  height:10px;
+  background:#333;
+  border-radius:10px;
+  overflow:hidden;
+}
+.progress-inner {
+  height:100%;
+  background:#3b82f6;
+}
 
 .sub { font-size:12px; color:#888; margin-top:6px; }
 
-.month-scroll { display:flex; gap:6px; overflow:auto; margin:10px 0; }
-.month-pill { background:#222; padding:4px 8px; border-radius:12px; }
-.month-pill.active { background:#3b82f6; }
+.month-scroll {
+  display:flex;
+  gap:6px;
+  overflow:auto;
+  margin:10px 0;
+}
 
-.days { display:flex; flex-direction:column; gap:6px; }
-.day { display:flex; gap:6px; align-items:center; }
+.month-pill {
+  background:#222;
+  padding:4px 8px;
+  border-radius:12px;
+}
 
-.date { width:45px; font-size:12px; }
+.month-pill.active {
+  background:#3b82f6;
+}
 
-.bar { flex:1; height:18px; background:#333; border-radius:8px; position:relative; overflow:hidden; }
-.bar-dl { height:100%; background:#3b82f6; }
-.bar-ul { position:absolute; top:0; height:100%; background:#ef4444; opacity:.7; }
+.days {
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
 
-.month-bar { height:20px; background:#333; border-radius:10px; overflow:hidden; position:relative; }
+.day {
+  display:flex;
+  gap:6px;
+  align-items:center;
+}
 
-.empty { color:#777; font-size:12px; }
+.date {
+  width:45px;
+  font-size:12px;
+}
 
-.sheet { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:flex-end; }
-.sheet-inner { background:#111; width:100%; padding:16px; border-radius:12px 12px 0 0; }
+.bar {
+  flex:1;
+  height:18px;
+  background:#333;
+  border-radius:8px;
+  position:relative;
+  overflow:hidden;
+}
+
+.bar-dl {
+  height:100%;
+  background:#3b82f6;
+}
+
+.bar-ul {
+  position:absolute;
+  top:0;
+  height:100%;
+  background:#ef4444;
+  opacity:.7;
+}
+
+.month-bar {
+  height:20px;
+  background:#333;
+  border-radius:10px;
+  overflow:hidden;
+  position:relative;
+}
+
+.empty {
+  color:#777;
+  font-size:12px;
+}
+
+.sheet {
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.6);
+  display:flex;
+  align-items:flex-end;
+}
+
+.sheet-inner {
+  background:#111;
+  width:100%;
+  padding:16px;
+  border-radius:12px 12px 0 0;
+}
 </style>
