@@ -20,29 +20,27 @@ func main() {
 	log.Println("Using interface:", src.Iface)
 	src.DebugNet()
 
-	// Get embedded static sub-FS
 	subFS, err := fs.Sub(staticFS, "static")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// SPA file server: serve files, fallback to index.html for unknown paths
 	fileServer := http.FileServer(http.FS(subFS))
 	http.Handle("/", spaHandler(subFS, fileServer))
 
-	// API & WebSocket routes
-	http.HandleFunc("/api/network-live", src.HandleNetworkLive)     // NEW
-	http.HandleFunc("/api/network-history", src.HandleNetworkHistory) // NEW
+	// API
+	http.HandleFunc("/api/network-totals", src.HandleNetworkTotals) // compatibility
+	http.HandleFunc("/api/network-live", src.HandleNetworkLive)
+	http.HandleFunc("/api/network-history", src.HandleNetworkHistory)
+
 	http.HandleFunc("/ws", src.WSHandler)
 
-	// Start background collector
 	go src.StartCollector()
 
 	log.Println("StatSee running on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-// spaHandler serves static files from fsys, falls back to index.html for SPA routing
 func spaHandler(fsys fs.FS, fsHandler http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")

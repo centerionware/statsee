@@ -7,11 +7,14 @@
       <RamChart style="height: 400px;padding: 35px; margin: 10px;"/>
       <DiskChart style="height: 400px;padding: 35px; margin: 10px;"/>
       <NetChart style="height: 400px;padding: 35px; margin: 10px;"/>
-      <NetTotals style="height: 400px;padding: 35px; margin: 10px;"/>
       <JSConsole style="height: 400px;padding: 35px; margin: 10px;"/>
+      <SpeedTest style="height: 400px;padding: 35px; margin: 10px;"/>
+      <Card title="Network Totals" style="padding: 35px; margin: 10px;">
+        <NetTotals />
+      </Card>
     </div>
 
-    <SpeedTest style="height: 400px;"/>
+    
   </div>
 </template>
 

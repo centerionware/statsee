@@ -25,7 +25,7 @@ type NetSnapshot struct {
 var lastPersist time.Time
 
 // --------------------
-// INIT / CLOSE
+// INIT
 // --------------------
 
 func InitDB() {
@@ -47,11 +47,11 @@ func CloseDB() {
 }
 
 // --------------------
-// WRITE LOGIC
+// WRITE LOGIC (UTC + FIXED RETENTION)
 // --------------------
 
 func UpdateNetworkTotals(rx, tx uint64) {
-	now := time.Now()
+	now := time.Now().UTC()
 
 	if time.Since(lastPersist) < 5*time.Second {
 		return
@@ -72,27 +72,29 @@ func UpdateNetworkTotals(rx, tx uint64) {
 
 		data, _ := json.Marshal(current)
 
-		// current snapshot
+		prev := b.Get([]byte("meta:current"))
+
+		// Store current
 		if err := b.Put([]byte("meta:current"), data); err != nil {
 			return err
 		}
 
-		// DAILY SNAPSHOT
 		dayKey := "daily:" + now.Format("2006-01-02")
-		if b.Get([]byte(dayKey)) == nil {
-			b.Put([]byte(dayKey), data)
+		monthKey := "monthly:" + now.Format("2006-01")
+
+		// Snapshot previous value at boundary
+		if b.Get([]byte(dayKey)) == nil && prev != nil {
+			b.Put([]byte(dayKey), prev)
 			log.Println("Created daily snapshot:", dayKey)
 		}
 
-		// MONTHLY SNAPSHOT
-		monthKey := "monthly:" + now.Format("2006-01")
-		if b.Get([]byte(monthKey)) == nil {
-			b.Put([]byte(monthKey), data)
+		if b.Get([]byte(monthKey)) == nil && prev != nil {
+			b.Put([]byte(monthKey), prev)
 			log.Println("Created monthly snapshot:", monthKey)
 		}
 
-		// CLEANUP OLD DAILY (>30 days)
-		cutoff := now.AddDate(0, 0, -30)
+		// ✅ RETENTION: keep ONLY current month daily data
+		currentMonth := now.Format("2006-01")
 
 		c := b.Cursor()
 		for k, _ := c.First(); k != nil; k, _ = c.Next() {
@@ -101,7 +103,11 @@ func UpdateNetworkTotals(rx, tx uint64) {
 			if strings.HasPrefix(key, "daily:") {
 				dateStr := strings.TrimPrefix(key, "daily:")
 				t, err := time.Parse("2006-01-02", dateStr)
-				if err == nil && t.Before(cutoff) {
+				if err != nil {
+					continue
+				}
+
+				if t.Format("2006-01") != currentMonth {
 					b.Delete(k)
 				}
 			}
@@ -117,7 +123,7 @@ func UpdateNetworkTotals(rx, tx uint64) {
 
 //
 // --------------------
-// LIVE API (FAST)
+// LIVE API
 // --------------------
 
 func HandleNetworkLive(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +135,7 @@ func HandleNetworkLive(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
-		now := time.Now()
+		now := time.Now().UTC()
 
 		todayKey := "daily:" + now.Format("2006-01-02")
 		monthKey := "monthly:" + now.Format("2006-01")
@@ -147,10 +153,10 @@ func HandleNetworkLive(w http.ResponseWriter, r *http.Request) {
 		}
 
 		result[Iface] = NetTotals{
-			DailyIn:    bytesToGB(current.Rx - todaySnap.Rx),
-			DailyOut:   bytesToGB(current.Tx - todaySnap.Tx),
-			MonthlyIn:  bytesToGB(current.Rx - monthSnap.Rx),
-			MonthlyOut: bytesToGB(current.Tx - monthSnap.Tx),
+			DailyIn:    safeDelta(current.Rx, todaySnap.Rx),
+			DailyOut:   safeDelta(current.Tx, todaySnap.Tx),
+			MonthlyIn:  safeDelta(current.Rx, monthSnap.Rx),
+			MonthlyOut: safeDelta(current.Tx, monthSnap.Tx),
 		}
 
 		return nil
@@ -161,7 +167,7 @@ func HandleNetworkLive(w http.ResponseWriter, r *http.Request) {
 
 //
 // --------------------
-// HISTORY API (SLOW)
+// HISTORY API
 // --------------------
 
 func HandleNetworkHistory(w http.ResponseWriter, r *http.Request) {
@@ -205,49 +211,75 @@ func HandleNetworkHistory(w http.ResponseWriter, r *http.Request) {
 			return monthlySnaps[i].key < monthlySnaps[j].key
 		})
 
-		// build daily deltas
+		// Daily deltas
 		for i := 1; i < len(dailySnaps); i++ {
 			prev := dailySnaps[i-1]
 			curr := dailySnaps[i]
 
-			date := strings.TrimPrefix(curr.key, "daily:")
-
 			daily = append(daily, DailyStat{
-				Date: date,
-				In:   bytesToGB(curr.val.Rx - prev.val.Rx),
-				Out:  bytesToGB(curr.val.Tx - prev.val.Tx),
+				Date: strings.TrimPrefix(curr.key, "daily:"),
+				In:   safeDelta(curr.val.Rx, prev.val.Rx),
+				Out:  safeDelta(curr.val.Tx, prev.val.Tx),
 			})
 		}
 
-		// build monthly deltas
+		// Monthly deltas
 		for i := 1; i < len(monthlySnaps); i++ {
 			prev := monthlySnaps[i-1]
 			curr := monthlySnaps[i]
 
-			month := strings.TrimPrefix(curr.key, "monthly:")
-
 			monthly = append(monthly, MonthlyStat{
-				Month: month,
-				In:    bytesToGB(curr.val.Rx - prev.val.Rx),
-				Out:   bytesToGB(curr.val.Tx - prev.val.Tx),
+				Month: strings.TrimPrefix(curr.key, "monthly:"),
+				In:    safeDelta(curr.val.Rx, prev.val.Rx),
+				Out:   safeDelta(curr.val.Tx, prev.val.Tx),
 			})
 		}
+
+		// ✅ Include current month live
+		now := time.Now().UTC()
+		monthKey := "monthly:" + now.Format("2006-01")
+
+		var monthSnap, current NetSnapshot
+
+		if v := b.Get([]byte(monthKey)); v != nil {
+			json.Unmarshal(v, &monthSnap)
+		}
+		if v := b.Get([]byte("meta:current")); v != nil {
+			json.Unmarshal(v, &current)
+		}
+
+		monthly = append(monthly, MonthlyStat{
+			Month: now.Format("2006-01"),
+			In:    safeDelta(current.Rx, monthSnap.Rx),
+			Out:   safeDelta(current.Tx, monthSnap.Tx),
+		})
 
 		return nil
 	})
 
-	resp := map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"daily":   daily,
 		"monthly": monthly,
-	}
-
-	json.NewEncoder(w).Encode(resp)
+	})
 }
 
+//
+// --------------------
+// COMPAT
+// --------------------
+
+func HandleNetworkTotals(w http.ResponseWriter, r *http.Request) {
+	HandleNetworkLive(w, r)
+}
+
+//
 // --------------------
 // HELPERS
 // --------------------
 
-func bytesToGB(v uint64) float64 {
-	return float64(v) / 1024 / 1024 / 1024
+func safeDelta(a, b uint64) float64 {
+	if a < b {
+		return 0
+	}
+	return float64(a-b) / 1024 / 1024 / 1024
 }
