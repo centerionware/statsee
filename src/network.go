@@ -13,7 +13,7 @@ var (
 	prevTx   uint64
 	prevTime time.Time
 
-	Iface = getInterface()
+	NetIface = getInterface()
 )
 
 func getInterface() string {
@@ -24,7 +24,7 @@ func getInterface() string {
 }
 
 func readHostNetDev() (uint64, uint64, error) {
-	base := "/host/sys/class/net/" + Iface + "/statistics"
+	base := "/host/sys/class/net/" + NetIface + "/statistics"
 
 	rxBytes, err := os.ReadFile(base + "/rx_bytes")
 	if err != nil {
@@ -85,7 +85,7 @@ func GetNetwork() map[string]interface{} {
 	UpdateNetworkTotals(rx, tx)
 
 	return map[string]interface{}{
-		Iface: map[string]float64{
+		NetIface: map[string]float64{
 			"rate_recv": rxRate,
 			"rate_sent": txRate,
 		},
