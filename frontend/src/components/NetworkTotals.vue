@@ -11,8 +11,10 @@
       <div class="progress-inner" :style="{ width: todayPercent + '%' }"></div>
     </div>
 
+    <!-- FIXED: monthly now derived from daily history -->
     <div class="sub">
-      Month: {{ currentMonthTotal.in.toFixed(2) }} /
+      Month:
+      {{ currentMonthTotal.in.toFixed(2) }} /
       {{ currentMonthTotal.out.toFixed(2) }} GB
     </div>
 
@@ -56,8 +58,14 @@
       <div class="label">{{ selectedMonth }}</div>
 
       <div class="month-bar">
-        <div class="bar-dl" :style="{ width: percent(currentMonthTotal.in) + '%' }"></div>
-        <div class="bar-ul" :style="{ width: percent(currentMonthTotal.out) + '%' }"></div>
+        <div
+          class="bar-dl"
+          :style="{ width: percent(currentMonthTotal.in) + '%' }"
+        ></div>
+        <div
+          class="bar-ul"
+          :style="{ width: percent(currentMonthTotal.out) + '%' }"
+        ></div>
       </div>
     </div>
 
@@ -103,12 +111,19 @@ const filteredDays = computed(() =>
   history.value.daily.filter(d => d.date.startsWith(selectedMonth.value))
 )
 
+/**
+ * 🔥 FIX: monthly is now computed from daily data (source of truth)
+ */
 const currentMonthTotal = computed(() => {
-  return (
-    history.value.monthly.find(m => m.month === selectedMonth.value) || {
-      in: 0,
-      out: 0
-    }
+  const days = filteredDays.value
+
+  return days.reduce(
+    (acc, d) => {
+      acc.in += d.in
+      acc.out += d.out
+      return acc
+    },
+    { in: 0, out: 0 }
   )
 })
 
@@ -151,6 +166,7 @@ onMounted(() => {
   border-radius:10px;
   overflow:hidden;
 }
+
 .progress-inner {
   height:100%;
   background:#3b82f6;
