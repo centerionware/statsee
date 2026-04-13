@@ -3,8 +3,8 @@
     <div class="label">Today</div>
 
     <div class="totals">
-      <div class="dl">⬇ {{ live.daily_in.toFixed(2) }} GB</div>
-      <div class="ul">⬆ {{ live.daily_out.toFixed(2) }} GB</div>
+      <div class="dl">⬇ {{ live.daily_in?.toFixed(2) || 0 }} GB</div>
+      <div class="ul">⬆ {{ live.daily_out?.toFixed(2) || 0 }} GB</div>
     </div>
 
     <div class="progress">
@@ -12,7 +12,8 @@
     </div>
 
     <div class="sub">
-      Month: {{ live.monthly_in.toFixed(2) }} / {{ live.monthly_out.toFixed(2) }} GB
+      Month: {{ currentMonthTotal.in.toFixed(2) }} /
+      {{ currentMonthTotal.out.toFixed(2) }} GB
     </div>
 
     <div class="month-scroll">
@@ -27,12 +28,11 @@
       </div>
     </div>
 
-    <!-- CURRENT MONTH VIEW -->
     <div v-if="isCurrentMonth">
       <div class="label">Daily Usage</div>
 
       <div v-if="filteredDays.length === 0" class="empty">
-        No data yet (wait for data collection)
+        No data yet
       </div>
 
       <div class="days">
@@ -52,23 +52,15 @@
       </div>
     </div>
 
-    <!-- PAST MONTH VIEW -->
     <div v-else>
       <div class="label">{{ selectedMonth }}</div>
 
       <div class="month-bar">
-        <div
-          class="bar-dl"
-          :style="{ width: percent(selectedMonthData.in) + '%' }"
-        ></div>
-        <div
-          class="bar-ul"
-          :style="{ width: percent(selectedMonthData.out) + '%' }"
-        ></div>
+        <div class="bar-dl" :style="{ width: percent(currentMonthTotal.in) + '%' }"></div>
+        <div class="bar-ul" :style="{ width: percent(currentMonthTotal.out) + '%' }"></div>
       </div>
     </div>
 
-    <!-- DAY DETAIL SHEET -->
     <div v-if="selectedDay" class="sheet" @click.self="selectedDay = null">
       <div class="sheet-inner">
         <b>{{ selectedDay.date }}</b><br />
@@ -88,10 +80,6 @@ const history = ref({ daily: [], monthly: [] })
 const selectedMonth = ref('')
 const selectedDay = ref(null)
 
-// --------------------
-// DATA LOADING
-// --------------------
-
 async function loadLive() {
   const r = await fetch('/api/network-live')
   const j = await r.json()
@@ -107,10 +95,6 @@ async function loadHistory() {
   }
 }
 
-// --------------------
-// COMPUTED STATE
-// --------------------
-
 const isCurrentMonth = computed(() =>
   selectedMonth.value === new Date().toISOString().slice(0, 7)
 )
@@ -119,12 +103,14 @@ const filteredDays = computed(() =>
   history.value.daily.filter(d => d.date.startsWith(selectedMonth.value))
 )
 
-const selectedMonthData = computed(() =>
-  history.value.monthly.find(m => m.month === selectedMonth.value) || {
-    in: 0,
-    out: 0
-  }
-)
+const currentMonthTotal = computed(() => {
+  return (
+    history.value.monthly.find(m => m.month === selectedMonth.value) || {
+      in: 0,
+      out: 0
+    }
+  )
+})
 
 const maxDaily = computed(() =>
   Math.max(...history.value.daily.map(d => d.in + d.out), 1)
@@ -134,30 +120,15 @@ function percent(v) {
   return (v / maxDaily.value) * 100
 }
 
-// FIXED: correct month baseline (no misleading ratio anymore)
 const todayPercent = computed(() => {
   const t = (live.value.daily_in || 0) + (live.value.daily_out || 0)
-
-  const currentMonth = history.value.monthly.find(
-    m => m.month === new Date().toISOString().slice(0, 7)
-  ) || { in: 0, out: 0 }
-
-  const total = currentMonth.in + currentMonth.out
-
-  return total === 0 ? 0 : (t / total) * 100
+  const m = currentMonthTotal.value.in + currentMonthTotal.value.out
+  return m === 0 ? 0 : (t / m) * 100
 })
-
-// --------------------
-// ACTIONS
-// --------------------
 
 function selectMonth(m) {
   selectedMonth.value = m
 }
-
-// --------------------
-// INIT
-// --------------------
 
 onMounted(() => {
   loadLive()

@@ -21,7 +21,7 @@ var Iface = getInterface()
 const bucket = "net"
 
 // --------------------
-// OLD + NEW TYPES
+// TYPES
 // --------------------
 
 type NetSnapshot struct {
@@ -36,7 +36,7 @@ type Accumulator struct {
 }
 
 // --------------------
-// INIT
+// INIT + MIGRATION
 // --------------------
 
 func InitDB() {
@@ -61,32 +61,26 @@ func CloseDB() {
 // KEY HELPERS
 // --------------------
 
-func oldDailyKey(t time.Time) string   { return "daily:" + t.Format("2006-01-02") }
-func oldMonthlyKey(t time.Time) string { return "monthly:" + t.Format("2006-01") }
-
 func newDailyKey(t time.Time) string   { return "acc:daily:" + t.Format("2006-01-02") }
 func newMonthlyKey(t time.Time) string { return "acc:monthly:" + t.Format("2006-01") }
 
-func metaMigratedKey() []byte { return []byte("meta:migrated") }
 func metaLastKey() []byte     { return []byte("meta:last") }
+func metaMigratedKey() []byte { return []byte("meta:migrated") }
 
 // --------------------
-// MIGRATION (RUN ONCE)
+// MIGRATION (OLD → NEW)
 // --------------------
 
 func runMigration() {
 	_ = db.Update(func(txn *bolt.Tx) error {
-		b, err := txn.CreateBucketIfNotExists([]byte(bucket))
-		if err != nil {
-			return err
-		}
+		b, _ := txn.CreateBucketIfNotExists([]byte(bucket))
 
 		if b.Get(metaMigratedKey()) != nil {
-			log.Println("Migration already completed")
+			log.Println("Migration already done")
 			return nil
 		}
 
-		log.Println("Running DB migration (old -> accumulator format)...")
+		log.Println("Running migration...")
 
 		c := b.Cursor()
 
@@ -98,58 +92,40 @@ func runMigration() {
 				continue
 			}
 
-			// ---------------------------
-			// MIGRATE DAILY
-			// ---------------------------
-			if strings.HasPrefix(key, "daily:") {
-				date := strings.TrimPrefix(key, "daily:")
-
-				acc := Accumulator{
-					In:  float64(snap.Rx) / 1024 / 1024 / 1024,
-					Out: float64(snap.Tx) / 1024 / 1024 / 1024,
-				}
-
-				data, _ := json.Marshal(acc)
-				_ = b.Put([]byte("acc:daily:"+date), data)
+			acc := Accumulator{
+				In:  float64(snap.Rx) / 1024 / 1024 / 1024,
+				Out: float64(snap.Tx) / 1024 / 1024 / 1024,
 			}
 
-			// ---------------------------
-			// MIGRATE MONTHLY
-			// ---------------------------
-			if strings.HasPrefix(key, "monthly:") {
+			switch {
+			case strings.HasPrefix(key, "daily:"):
+				date := strings.TrimPrefix(key, "daily:")
+				data, _ := json.Marshal(acc)
+				_ = b.Put([]byte("acc:daily:"+date), data)
+
+			case strings.HasPrefix(key, "monthly:"):
 				month := strings.TrimPrefix(key, "monthly:")
-
-				acc := Accumulator{
-					In:  float64(snap.Rx) / 1024 / 1024 / 1024,
-					Out: float64(snap.Tx) / 1024 / 1024 / 1024,
-				}
-
 				data, _ := json.Marshal(acc)
 				_ = b.Put([]byte("acc:monthly:"+month), data)
 			}
 		}
 
 		_ = b.Put(metaMigratedKey(), []byte("done"))
-
 		log.Println("Migration complete")
 		return nil
 	})
 }
 
 // --------------------
-// UPDATE LOOP (NEW MODEL)
+// UPDATE LOOP (ACCUMULATION ENGINE)
 // --------------------
 
 func UpdateNetworkTotals(rx, tx uint64) {
 	now := time.Now().UTC()
 
 	_ = db.Update(func(txn *bolt.Tx) error {
-		b, err := txn.CreateBucketIfNotExists([]byte(bucket))
-		if err != nil {
-			return err
-		}
+		b, _ := txn.CreateBucketIfNotExists([]byte(bucket))
 
-		// last snapshot
 		var prev NetSnapshot
 		if v := b.Get(metaLastKey()); v != nil {
 			_ = json.Unmarshal(v, &prev)
@@ -166,22 +142,19 @@ func UpdateNetworkTotals(rx, tx uint64) {
 			dRx, dTx = 0, 0
 		} else if reboot {
 			dRx, dTx = 0, 0
-			log.Println("Reboot detected (baseline reset)")
 		} else {
 			dRx = rx - prev.Rx
 			dTx = tx - prev.Tx
 		}
 
-		// store snapshot
 		raw, _ := json.Marshal(current)
 		_ = b.Put(metaLastKey(), raw)
 
-		// accumulate daily
+		// DAILY
 		dk := newDailyKey(now)
+
 		var d Accumulator
-		if v := b.Get([]byte(dk)); v != nil {
-			_ = json.Unmarshal(v, &d)
-		}
+		_ = json.Unmarshal(b.Get([]byte(dk)), &d)
 
 		d.In += float64(dRx) / 1024 / 1024 / 1024
 		d.Out += float64(dTx) / 1024 / 1024 / 1024
@@ -189,12 +162,11 @@ func UpdateNetworkTotals(rx, tx uint64) {
 		dd, _ := json.Marshal(d)
 		_ = b.Put([]byte(dk), dd)
 
-		// accumulate monthly
+		// MONTHLY
 		mk := newMonthlyKey(now)
+
 		var m Accumulator
-		if v := b.Get([]byte(mk)); v != nil {
-			_ = json.Unmarshal(v, &m)
-		}
+		_ = json.Unmarshal(b.Get([]byte(mk)), &m)
 
 		m.In += float64(dRx) / 1024 / 1024 / 1024
 		m.Out += float64(dTx) / 1024 / 1024 / 1024
@@ -207,13 +179,13 @@ func UpdateNetworkTotals(rx, tx uint64) {
 }
 
 // --------------------
-// LIVE API (FIXED)
+// LIVE API (TODAY ONLY)
 // --------------------
 
 func HandleNetworkLive(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 
-	var daily, monthly Accumulator
+	var daily Accumulator
 
 	_ = db.View(func(txn *bolt.Tx) error {
 		b := txn.Bucket([]byte(bucket))
@@ -222,25 +194,19 @@ func HandleNetworkLive(w http.ResponseWriter, r *http.Request) {
 		}
 
 		_ = json.Unmarshal(b.Get([]byte(newDailyKey(now))), &daily)
-		_ = json.Unmarshal(b.Get([]byte(newMonthlyKey(now))), &monthly)
-
 		return nil
 	})
 
-	resp := map[string]NetTotals{
+	_ = json.NewEncoder(w).Encode(map[string]NetTotals{
 		Iface: {
-			DailyIn:    daily.In,
-			DailyOut:   daily.Out,
-			MonthlyIn:  monthly.In,
-			MonthlyOut: monthly.Out,
+			DailyIn:  daily.In,
+			DailyOut: daily.Out,
 		},
-	}
-
-	_ = json.NewEncoder(w).Encode(resp)
+	})
 }
 
 // --------------------
-// HISTORY API (FIXED)
+// HISTORY API (SOURCE OF TRUTH)
 // --------------------
 
 func HandleNetworkHistory(w http.ResponseWriter, r *http.Request) {
